@@ -1,0 +1,32 @@
+name: CI
+
+# 這個專案沒有構建步驟, 也沒有 bundler / linter / 測試框架。
+# 唯一能自動化的門檻就是「兩個 JS 檔必須可解析」, 以及「倉庫自帶的靜態資源不壞」。
+# 保持最小: 門檻少而確實會跑, 勝過一堆從不執行的檢查。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check
+        run: |
+          node --check main.js
+          node --check i18n.js
+
+      - name: i18n dictionaries must have identical keys
+        run: node scripts/check-i18n.mjs
+
+      - name: Every texture referenced by the default (4k) tier must exist
+        run: node scripts/check-assets.mjs
