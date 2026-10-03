@@ -1,0 +1,69 @@
+MIT License
+
+Copyright (c) 2026 邱乙 (John Kuu)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Third-party assets included in this repository are NOT covered by the MIT
+license above. They remain under their own terms, listed below.
+
+three.js (MIT)
+  Directory: vendor/
+  Copyright (c) 2010-2023 Three.js Authors
+  SPDX-License-Identifier: MIT
+  https://github.com/mrdoob/three.js  (vendored release: r160)
+  vendor/three.module.js reproduces the full license text in its header, and
+  the 12 files under vendor/addons/ are covered by the same MIT license (they
+  carry no per-file header upstream; see the LICENSE file of the three.js
+  repository).
+
+Planetary textures (CC BY 4.0)
+  Directory: textures/
+  Source: "Solar System Scope Texture Pack" by Gregor Skale / Solar System Scope
+  License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  https://www.solarsystemscope.com/textures/
+  Attribution required when you redistribute or publicly display these files.
+  Provenance, verified by SHA-256 against the live upstream:
+    textures/<name>            ( 9 files, 2k)  byte-identical to upstream 2k_*
+            (mercury, venus_surface, mars, jupiter, saturn, uranus, neptune,
+             moon, saturn_ring_alpha.png)
+    textures/8k_<name>.jpg     ( 7 files, 8k)  byte-identical to upstream 8k_*
+    textures/4k_<name>.jpg     ( 9 files, 4k)  NOT an upstream file: Solar System
+            Scope publishes no 4k tier. These are downscales of the 8k files
+            (reproducible with `sips -Z 4096`), and remain CC BY 4.0 derivative
+            works of the upstream 8k images.
+  Two upstream quirks, encoded deliberately in main.js: uranus/neptune exist only
+  at 2k, and upstream's 8k_jupiter.jpg / 8k_saturn.jpg are actually 4096px images
+  (4k under an 8k filename), so 8k aliases to 4k for those two planets.
+  Note: four (4) Earth maps are NOT from Solar System Scope (they are among the
+  13 unprefixed files listed above):
+    textures/earth_daymap.jpg     <- three.js examples (MIT), file
+                                     examples/textures/planets/earth_atmos_2048.jpg
+    textures/earth_normal.jpg     <- three.js examples (MIT), file
+                                     examples/textures/planets/earth_normal_2048.jpg
+    textures/earth_specular.jpg   <- three.js examples (MIT), file
+                                     examples/textures/planets/earth_specular_2048.jpg
+    textures/earth_clouds.jpg     <- three.js examples (MIT), file
+                                     examples/textures/planets/earth_clouds_1024.png
+                                     (PNG data; the .jpg extension is inherited
+                                     from the original project layout)
+  The 8k_* files are not committed to this repository (about 68 MB); run
+  scripts/fetch-textures.sh to download and verify them.

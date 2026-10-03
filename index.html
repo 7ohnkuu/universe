@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>太陽系 · 黑洞引力透鏡模擬 (three.js)</title>
+<!-- 內嵌 SVG 圖標: 不另開檔案, 也不會產生 /favicon.ico 404 (會污染 console) -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%23000'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ffb84d'/%3E%3Cellipse cx='16' cy='16' rx='14' ry='4' fill='none' stroke='%237cc4ff' stroke-width='1.6' opacity='.8'/%3E%3C/svg%3E" />
+<style>
+  :root { --fg:#e9eef5; --accent:#7cc4ff; --panel:rgba(12,16,24,0.72); }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; background:#000; color:var(--fg);
+    font-family: ui-sans-serif, system-ui, "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  body[data-lang="en"] { font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; }
+
+  /* CSS2D label layer */
+  #labels { position:fixed; inset:0; pointer-events:none; overflow:hidden;
+    transition: opacity 180ms ease-out; }
+  #labels.hidden { opacity: 0; }
+  .label { color:#dfe9f5; font-size:12px; letter-spacing:.4px; text-shadow:0 0 6px #000,0 0 3px #000;
+    padding:1px 6px; border:1px solid rgba(140,180,220,.25); border-radius:10px;
+    background:rgba(8,12,20,.35); white-space:nowrap; transform:translate(-50%,-140%); }
+  .label.bh { color:#ffd9a0; border-color:rgba(255,170,80,.5); }
+
+  /* Control panel */
+  #ui { position:fixed; top:14px; left:14px; width:268px; padding:14px 16px;
+    background:var(--panel); border:1px solid rgba(120,160,200,.18); border-radius:14px;
+    box-shadow:0 8px 30px rgba(0,0,0,.45); z-index:10;
+    /* 自動收回: 用 transform 滑出 (不走 width/display, 避免觸發 layout 與 label 重排)。
+       visibility 的延遲只掛在 .collapsed 上: 收起時等滑完再從可焦點/無障礙樹移除,
+       展開時 (套用基底規則) 立刻恢復 —— 若掛在基底上, 展開也會延遲 240ms, 看起來是壞的。 */
+    transition: transform 240ms cubic-bezier(.22,1,.36,1), opacity 200ms ease-out; }
+  #ui.collapsed { transform: translateX(calc(-100% - 20px)); opacity:0; visibility:hidden; pointer-events:none;
+    transition: transform 240ms cubic-bezier(.22,1,.36,1), opacity 200ms ease-out, visibility 0s linear 240ms; }
+  @media (prefers-reduced-motion: reduce) {
+    #ui, #ui.collapsed { transition: visibility 0s; }  /* 不滑動, visibility 即時切換 */
+    #ui.collapsed { transform: none; }
+  }
+  /* 收起後的喚出鈕: 平時隱藏, 面板滑出後淡入; 與面板互斥避免焦點/點擊落在不可見元素 */
+  #uiShow { position:fixed; top:14px; left:14px; z-index:11; display:none;
+    opacity:0; pointer-events:none; transition: opacity 200ms ease-out; }
+  #uiShow.show { display:block; opacity:1; pointer-events:auto; }
+  @media (max-width: 640px) {
+    #uiShow { top:8px; left:8px; }
+  }
+  /* 拉丁字串在同一字號下比中文寬得多 (中文一字=一字寬, 英文平均 0.5 字寬/字母)。
+     為 en 單獨微調面板寬與標題字號, 讓標題不折行 —— 這是光學調整, 不是翻譯縮水。
+     只限桌面: 窄屏下面板本來就走 left/right 撐滿, 不能被固定寬度搶回去。 */
+  @media (min-width: 641px) {
+    body[data-lang="en"] #ui { width:296px; }
+  }
+  body[data-lang="en"] #ui h1 { font-size:13px; }
+  #ui .hdr { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+  #ui h1 { font-size:14px; margin:0; font-weight:600; line-height:1.25; }
+  #ui .sub { font-size:11px; opacity:.6; margin:2px 0 10px; }
+  .grp { margin-top:10px; padding-top:9px; border-top:1px solid rgba(120,160,200,.13); }
+  .grp-t { font-size:10.5px; opacity:.5; letter-spacing:2px; margin-bottom:6px; }
+  .row { margin:10px 0; }
+  .row label { display:flex; justify-content:space-between; font-size:12px; opacity:.85; margin-bottom:5px; }
+  .row label b { color:var(--accent); font-weight:600; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  select, button { font:inherit; color:var(--fg); background:rgba(255,255,255,.06);
+    border:1px solid rgba(140,180,220,.25); border-radius:8px; padding:6px 8px; }
+  select { width:100%; }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; }
+  .btns button, .lang-btn { cursor:pointer;
+    transition: background-color 150ms ease, border-color 150ms ease, transform 160ms ease-out; }
+  .btns button:active, .lang-btn:active { transform: scale(0.97); }
+  @media (hover: hover) and (pointer: fine) {
+    .btns button:hover, .lang-btn:hover { background:rgba(124,196,255,.18); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .btns button:active, .lang-btn:active { transform: none; }
+  }
+  .btns button.on, .lang-btn.on { background:rgba(124,196,255,.28); border-color:var(--accent); }
+  /* 語言切換: 比一般按鈕更輕量, 只作為標題列的小開關 */
+  .lang { display:flex; gap:4px; flex:0 0 auto; }
+  .lang-btn { font-size:10.5px; line-height:1; padding:4px 6px; border-radius:6px; opacity:.75; }
+  .lang-btn.on { opacity:1; }
+  /* 收起/釘選: 放在標題列的小圖示鈕, 與語言切換同一列 */
+  .hdr-btn { width:26px; height:24px; padding:0; line-height:1; font-size:12px;
+    display:inline-flex; align-items:center; justify-content:center; opacity:.6; }
+  .hdr-btn:hover { opacity:1; }
+  .hdr-btn[aria-pressed="true"] { opacity:1; background:rgba(124,196,255,.28); border-color:var(--accent); }
+  .ui-hdr-btns { display:flex; gap:4px; flex:0 0 auto; align-items:center; }
+  .hint { font-size:10.5px; opacity:.5; margin-top:10px; line-height:1.5; }
+  .legend { font-size:10.5px; opacity:.55;
+    background:var(--panel); border:1px solid rgba(120,160,200,.15); border-radius:10px;
+    padding:8px 11px; max-width:300px; line-height:1.5; }
+  .legend.hidden { transform: translateX(calc(100% + 20px)); opacity:0; visibility:hidden; pointer-events:none;
+    transition: transform 240ms cubic-bezier(.22,1,.36,1), opacity 200ms ease-out, visibility 0s linear 240ms; }
+  /* 圖例右上角的小關閉鈕: 只在 hover/觸控時浮現, 平時不打擾閱讀。
+     ⚠ .legend 的文字由 data-i18n-html 驅動 (含換行/粗體), innerHTML 會清空子節點,
+     所以 ✕ 與文字必須是「兄弟」, 各自包在 .legend 內, 不能塞進文字節點裡。 */
+  .legend-wrap { position:fixed; right:14px; bottom:14px; z-index:10;
+    transition: transform 240ms cubic-bezier(.22,1,.36,1), opacity 200ms ease-out; }
+  .legend-wrap.hidden { transform: translateX(calc(100% + 20px)); opacity:0; visibility:hidden; pointer-events:none;
+    transition: transform 240ms cubic-bezier(.22,1,.36,1), opacity 200ms ease-out, visibility 0s linear 240ms; }
+  .legend-x { position:absolute; top:2px; right:4px; width:18px; height:18px; padding:0;
+    font-size:10px; line-height:1; display:none; align-items:center; justify-content:center;
+    border-radius:5px; opacity:.7; }
+  .legend-wrap:hover .legend-x, .legend-wrap:focus-within .legend-x { display:inline-flex; }
+  .legend-x:hover { opacity:1; }
+  @media (prefers-reduced-motion: reduce) {
+    .legend-wrap, .legend-wrap.hidden { transition: visibility 0s; }
+    .legend-wrap.hidden { transform: none; }
+  }
+  /* 圖例自動隱藏後, 在右下角留一個極輕量的喚回鈕 (與 #uiShow 同一語彙) */
+  #legendShow { position:fixed; right:14px; bottom:14px; z-index:10; display:none;
+    font-size:10.5px; opacity:0; pointer-events:none; transition: opacity 200ms ease-out;
+    padding:4px 9px; }
+  #legendShow.show { display:block; opacity:1; pointer-events:auto; }
+  @media (hover: hover) and (pointer: fine) {
+    #legendShow:hover { background:rgba(124,196,255,.18); }
+  }
+  @media (max-width: 640px) {
+    #ui { left:8px; right:8px; top:8px; width:auto; max-height:48vh; overflow-y:auto; padding:10px 12px; }
+    /* 窄屏下面板撐滿寬, 滑左邊會露出一截; 改往上收, 與喚出鈕同一個角落 */
+    #ui.collapsed { transform: translateY(calc(-100% - 16px)); }
+    #ui .hint { display:none; }
+    .legend { display:none; }
+  }
+  #loader { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#000; z-index:50; font-size:13px; letter-spacing:1px; opacity:.9;
+    transition: opacity 250ms ease-out; }
+  #loader.done { opacity:0; pointer-events:none; }
+</style>
+
+<!-- three.js via import map; 本機 vendor/ (離線可用, 無網路依賴) -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="labels"></div>
+  <div id="loader" data-i18n="loader.init">載入中 · 初始化星系…</div>
+
+  <div id="ui">
+    <div class="hdr">
+      <h1 data-i18n="ui.h1">太陽系 · 黑洞引力透鏡</h1>
+      <div class="ui-hdr-btns">
+        <div class="lang" role="group" data-i18n-attr="aria-label:aria.lang">
+          <button type="button" class="lang-btn" data-lang-code="zh-TW" lang="zh-TW">中</button>
+          <button type="button" class="lang-btn" data-lang-code="en" lang="en">EN</button>
+        </div>
+        <button type="button" id="uiPin" class="hdr-btn" aria-pressed="false"
+                data-i18n-attr="aria-label:aria.pin,title:aria.pin">📌</button>
+        <button type="button" id="uiHide" class="hdr-btn"
+                data-i18n-attr="aria-label:aria.collapse,title:aria.collapse">✕</button>
+      </div>
+    </div>
+    <div class="sub" data-i18n="ui.sub">真實克卜勒軌道 · 即時渲染</div>
+
+    <div class="grp">
+      <div class="grp-t" data-i18n="grp.sim">模擬</div>
+      <div class="row">
+        <label><span data-i18n="sim.speed">時間流速</span> <b id="speedVal">0.20 年/秒</b></label>
+        <input id="speed" type="range" min="0" max="3" step="0.01" value="0.2" />
+      </div>
+      <div class="row btns">
+        <button id="pause" data-i18n="btn.pause">⏸ 暫停</button>
+      </div>
+    </div>
+
+    <div class="grp">
+      <div class="grp-t" data-i18n="grp.view">視角</div>
+      <div class="row">
+        <label data-i18n="view.follow">鏡頭追蹤</label>
+        <select id="focus">
+          <option value="-1" data-i18n="view.free">自由視角</option>
+          <option value="-2" data-i18n="planet.太陽">太陽</option>
+          <option value="-3" data-i18n="opt.bh">黑洞</option>
+        </select>
+      </div>
+      <div class="row btns">
+        <button id="reset" data-i18n="btn.reset">↺ 重置視角</button>
+      </div>
+    </div>
+
+    <div class="grp">
+      <div class="grp-t" data-i18n="grp.display">顯示</div>
+      <div class="row">
+        <label><span data-i18n="disp.quality">貼圖解析度</span> <b id="qualVal">4k</b></label>
+        <select id="quality">
+          <option value="8k" data-i18n="q.8k">8k (極高畫質, 大量顯存)</option>
+          <option value="4k" selected data-i18n="q.4k">4k (推薦)</option>
+          <option value="2k" data-i18n="q.2k">2k (省顯存)</option>
+        </select>
+      </div>
+      <div class="row btns">
+        <button id="tOrbits" class="on" aria-pressed="true" data-i18n="btn.orbits">軌道線</button>
+        <button id="tLabels" class="on" aria-pressed="true" data-i18n="btn.labels">名稱</button>
+      </div>
+      <div class="row btns">
+        <button id="tLens" class="on" aria-pressed="true" data-i18n="btn.lens">引力透鏡</button>
+        <button id="tBH" class="on" aria-pressed="true" data-i18n="btn.bh">黑洞</button>
+      </div>
+    </div>
+
+    <div class="hint" data-i18n-html="ui.hint">
+      拖曳旋轉 · 滾輪縮放 · 右鍵平移 (觸控: 單指旋轉 · 雙指縮放/平移)。<br/>
+      <b>點擊行星 / 太陽 / 黑洞</b>可自動飛行靠近並持續追蹤。<br/>
+      軌道距離已壓縮以便觀察，但行星相對週期、偏心率、軌道傾角均依真實數據。
+    </div>
+  </div>
+
+  <div class="legend-wrap">
+    <div class="legend" data-i18n-html="ui.legend">
+      外部黑洞運用螢幕空間引力透鏡著色器，彎曲背後星空與吸積盤光線，
+      並模擬事件視界與光子環。太陽與吸積盤以 HDR Bloom 產生真實輝光。
+    </div>
+    <button type="button" id="legendHide" class="legend-x"
+            data-i18n-attr="aria-label:aria.legendHide">✕</button>
+  </div>
+
+  <!-- 圖例自動隱藏後的喚回鈕 -->
+  <button type="button" id="legendShow" data-i18n="ui.legendShow">圖例</button>
+
+  <!-- 面板收起後的喚出鈕: 與面板同一角落, 只在收起時可見 -->
+  <button type="button" id="uiShow" aria-controls="ui" data-i18n="ui.expand">控制面板</button>
+
+  <!-- i18n 必須「先於」任何繪製執行: 傳統 script 是同步的, 而 module script 一律 defer,
+       所以放在 </body> 前同步載入, 讓靜態文字在首次繪製前就定位 (不會閃另一種語言)。 -->
+  <script src="./i18n.js"></script>
+  <script type="module" src="./main.js"></script>
+  <script>
+    // 顯示任何載入/執行期錯誤, 避免卡在「載入中」
+    // 顯示載入/執行期錯誤: 啟動完成前用全螢幕 #loader; 啟動完成後改用可關閉的橫幅,
+    // 避免一次執行期錯誤把正常運行的畫面永久遮死 (實作審查: real)
+    //
+    // 錯誤文字一律「延後取詞 + 保留原始 msg」: 換語言時可即時重譯, 且 t() 在
+    // i18n.js 尚未載入的極端情況下也能退回 key 而不崩潰。
+    // 錯誤訊息一律「存原始 msg + 每次重繪時取詞」: 換語言可即時重譯,
+    // 且後續錯誤不會蓋掉第一個 (真正的原因) 訊息。
+    function bannerText(el){
+      const I = window.__i18n;
+      const span = el.querySelector('span'), btn = el.querySelector('button');
+      if (span) span.textContent = I ? I.t('err.runtime', { msg: el.dataset.msg })
+                                     : '執行期錯誤：' + el.dataset.msg + '（Console 有詳情）';
+      if (btn) btn.textContent = I ? I.t('err.close') : '關閉';
+    }
+    function loaderText(el){
+      const I = window.__i18n;
+      el.textContent = I ? I.t('err.initFail', { msg: el.dataset.msg })
+                         : '初始化失敗：' + el.dataset.msg + '（請開啟開發者工具 Console 查看詳情）';
+    }
+    function showErrorBanner(msg){
+      let el = document.getElementById('errbar');
+      if (!el){
+        el = document.createElement('div'); el.id = 'errbar';
+        el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:60;background:rgba(120,20,20,.85);'+
+          'color:#ffd9d9;font-size:12px;padding:8px 14px;display:flex;gap:12px;align-items:center';
+        const t = document.createElement('span'); el.appendChild(t);
+        const b = document.createElement('button');
+        b.style.cssText = 'margin-left:auto;font:inherit;color:inherit;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:2px 8px;cursor:pointer';
+        b.onclick = () => el.remove();
+        el.appendChild(b);
+        document.body.appendChild(el);
+        el.dataset.msg = msg;
+      }
+      bannerText(el);
+    }
+    function showErr(msg){
+      if (window.__universeReady) { window.__universeError = true; showErrorBanner(msg); return; }
+      window.__universeError = true;
+      const el = document.getElementById('loader');
+      if (el){
+        el.style.display = 'flex'; el.classList.remove('done'); el.style.opacity = '1';
+        el.style.color = '#ff9a9a';
+        if (!el.dataset.msg) el.dataset.msg = msg;
+        loaderText(el);
+      }
+    }
+    // langchange 派發在 window 上 (元素收不到), 且必須在首次 showErr 之前就可註冊
+    window.addEventListener('langchange', () => {
+      const bar = document.getElementById('errbar');
+      if (bar) bannerText(bar);
+      const ld = document.getElementById('loader');
+      if (ld && ld.dataset.msg) loaderText(ld);
+    });
+    // 模組 script 的 fetch/實例化錯誤在 <script> 元素上且不冒泡 → 用 capture 監聽
+    window.addEventListener('error', e => {
+      const I = window.__i18n;
+      if (e.target && e.target !== window && e.target.tagName === 'SCRIPT')
+        showErr(I ? I.t('err.noModule') : 'three.js 模組載入失敗 (請確認 vendor/ 目錄; file:// 開啟會被 CORS 擋, 請用 python3 -m http.server)');
+      else if (e.message) showErr(e.message);
+    }, true);
+    window.addEventListener('unhandledrejection', e => {
+      const I = window.__i18n;
+      showErr((e.reason && e.reason.message) || e.reason || (I ? I.t('err.noModule') : '模組載入失敗'));
+    });
+    // 看門狗: main.js 若完全沒執行 (three.js 模組載入失敗), 30 秒後明確提示
+    window.__universeBooted = false;
+    window.__universeReady = false;
+    window.__universeError = false;
+    setTimeout(() => {
+      const I = window.__i18n;
+      if (!window.__universeBooted) showErr(I ? I.t('err.noBoot') : 'three.js 模組未載入 (請確認 vendor/three.module.js 存在; 離線開啟請用 python3 -m http.server)');
+      else if (!window.__universeReady) showErr(I ? I.t('err.noReady') : '初始化未完成, 請查看 Console');
+    }, 30000);
+  </script>
+</body>
+</html>

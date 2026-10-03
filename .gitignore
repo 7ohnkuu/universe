@@ -1,0 +1,14 @@
+# --- 作業系統 / 編輯器 ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# --- 8k 貼圖: 未隨倉庫發布 (7 檔約 68 MB), 請用 scripts/fetch-textures.sh 下載 ---
+#     2k 與 4k 已提交, 預設 4k 可直接執行, 缺 8k 不影響啟動。
+textures/8k_*
+
+# --- 備援: 本專案為純靜態站點, 無構建產物 ---
+node_modules/
+dist/
