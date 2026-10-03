@@ -39,6 +39,7 @@ click-to-fly-and-track · zh-TW / English UI.
 - [Auto-hiding UI](#auto-hiding-ui)
 - [Performance notes](#performance-notes)
 - [Browser support](#browser-support)
+- [Deployment](#deployment)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -46,6 +47,8 @@ click-to-fly-and-track · zh-TW / English UI.
 ---
 
 ## Quick start
+
+**Live demo:** <https://universe-johnkuu.vercel.app> — no install, no build.
 
 The page uses ES modules and an [import map](https://developer.mozilla.org/en-US/docs/Web/HTML/Attributes#use_of_an_import_map),
 so it **must be served over HTTP** — opening `index.html` with `file://` will
@@ -279,15 +282,20 @@ camera mid-flight cancels the approach instead of fighting you for control.
 ├── index.html                 markup + all CSS + boot/error watchdog (inline)
 ├── main.js                    the entire scene, ~1.4k lines, one ES module
 ├── i18n.js                    zh-TW / English dictionary (classic script, see below)
+├── vercel.json                static-host config: no framework, cache rules
+├── .vercelignore              keeps the untracked 8k maps out of a CLI deploy
 ├── scripts/
 │   ├── fetch-textures.sh      downloads + SHA-256-verifies the 8k maps
+│   ├── check-lang.mjs         CI: prose/comments must be Traditional Chinese
 │   ├── check-i18n.mjs         CI: dictionary keys must match across languages
-│   └── check-assets.mjs       CI: referenced textures must exist
+│   ├── check-assets.mjs       CI: referenced textures must exist
+│   ├── simp-chars.txt         data for check-lang (generated, do not hand-edit)
+│   └── gen-simp-chars.mjs     regenerates simp-chars.txt from Unicode Unihan
 ├── textures/                  2k (committed) · 4k (committed) · 8k (fetched)
 ├── vendor/                    three.js r160 + the 12 addons actually used
 ├── docs/screenshots/          the images in this README
 ├── plans/                     numbered motion-audit notes (001–006, all shipped)
-├── .github/workflows/ci.yml   the three checks below, on every push/PR
+├── .github/workflows/ci.yml   the four checks below, on every push/PR
 ├── LICENSE                    MIT, with third-party asset terms listed
 └── README.md
 ```
@@ -518,24 +526,137 @@ that a change is actually correct rather than just fast.
 
 ---
 
+## Deployment
+
+It is a static directory with no build step, so it deploys anywhere that serves
+files over HTTP. The live demo above runs on **Vercel Hobby**, configured by
+`vercel.json` in this repo — that file, not this section, is the source of truth:
+
+```json
+{ "framework": null, "outputDirectory": ".", "headers": [ … ] }
+```
+
+`framework: null` selects the "Other" preset, which is Vercel's documented path
+for projects with nothing to build. There is no `package.json` and no bundler,
+so the build step does no real work — but it still *runs*: the first deploy
+reported `build 3s`, `post-build 5s`, `billable duration 1m`. That is platform
+overhead, not a compile, and it is what consumes the plan's build minutes.
+
+### The gotcha that will bite you
+
+On a personal Vercel account, **Deployment Protection is on by default**, and it
+protects `*.vercel.app` URLs — meaning your site returns `302 → vercel.com/login`
+to every anonymous visitor while looking perfectly fine in your own browser.
+The symptom is a deployment that is "Ready" and serves `200` to you and `302` to
+everyone else.
+
+```bash
+# Verify as a visitor would, not as the owner:
+curl -sI https://<your-project>.vercel.app/ | head -1
+# 302 = protected. Fix by clearing project-level protection:
+echo '{"ssoProtection": null}' | \
+  vercel api -X PATCH /v9/projects/<your-project> --input -
+```
+
+This is project-scoped, so it survives re-deploys. Custom domains are exempt
+from the protection, which is why guides often say "just add a domain" — turning
+off protection is the answer that does not cost anything.
+
+### Cache headers
+
+`vercel.json` sets `max-age=604800` (7 days) on `/textures/*` and `/vendor/*`.
+
+Not `immutable`, deliberately: Vercel's own guidance reserves `immutable` for
+**content-hashed** assets, and these filenames are not hashed — `4k_mars.jpg` is
+`4k_mars.jpg` forever. Marking them immutable would strand visitors on a stale
+texture for a year after any swap. Seven days is the compromise: a returning
+visitor re-downloads at most once a week, and a swap propagates on its own.
+
+The measured effect, same browser, same machine:
+
+| | requests | bytes |
+|---|---|---|
+| First visit | 29 | 20.79 MB |
+| Return visit | 29 | **0.00 MB** |
+
+Without the header, Vercel's default for static files is
+`public, max-age=0, must-revalidate`, which revalidates all 29 on every visit.
+
+(That 20.79 MB is *after* Vercel's Brotli, which it applies to `main.js`,
+`i18n.js`, `index.html` and `vendor/` automatically — `three.module.js` goes
+1.27 MB → 0.26 MB. The same first visit from an uncompressed local server is
+21.84 MB. JPEGs and PNGs are already compressed, so they arrive byte-identical;
+the 1.05 MB difference is entirely code, and it reconciles the two numbers
+exactly.)
+
+### Bandwidth is the real constraint
+
+The Hobby plan includes 100 GB/month of transfer. At the default 4k tier a
+visitor downloads ~21.8 MB, so the free tier covers roughly **4,700 full page
+loads per month** — and only ~1,450 if they switch to 8k (70 MB). The 8k tier is
+not committed to the repo, so a deployed site does not carry those bytes unless
+you run `scripts/fetch-textures.sh` and deploy them deliberately.
+
+Also note the Hobby plan's terms restrict it to **personal, non-commercial use**.
+
+### Cold load is bandwidth-bound
+
+There is no progressive/streaming texture mode: `hideLoader()` awaits the whole
+batch, so the scene stays behind the loading overlay until all ~21.8 MB land. On
+the connection used for these tests that ranged from **22 s to 80 s** — the same
+build, different moments. The idle timers for the panel and legend deliberately
+start *after* the loader clears (`armUiIdle()` / `armLegendIdle()` are called from
+`hideLoader()`, not at module scope), so this delay does not consume
+them; it is the reason they appear to do nothing for the first minute.
+
+If that wait matters, the lever is the default tier: `4k` → `2k` in `index.html`
+cuts the first payload from 21.75 MB to 6.94 MB.
+
+If you deploy with the CLI from a working copy that has already fetched the 8k
+maps, `.vercelignore` keeps them out — otherwise they upload too, and 27 MB of
+repo becomes ~95 MB against a 100 MB source limit.
+
+### Alternatives
+
+Cloudflare Pages documents static asset requests as free and unlimited on the
+free tier, and supports a `_headers` file for the same cache control. GitHub
+Pages works too — every path in this project is relative, so the `/repo/`
+sub-path a project site lives on is fine — but it sends `max-age=600` on
+everything and cannot be overridden, and its 100 GB/month is a soft limit.
+
+---
+
 ## Development
 
 There is no build step, so there is no build to break. The automated gates are
-small on purpose — three checks, all runnable locally and all run in CI
+small on purpose — four checks, all runnable locally, all offline, all run in CI
 (`.github/workflows/ci.yml`):
 
 ```bash
 node --check main.js && node --check i18n.js   # 1. both files must parse
-node scripts/check-i18n.mjs                    # 2. zh-TW / en keys must match exactly
-node scripts/check-assets.mjs                  # 3. textures referenced by each tier must exist
+node scripts/check-lang.mjs                    # 2. text must be Traditional Chinese
+node scripts/check-i18n.mjs                    # 3. zh-TW / en keys must match exactly
+node scripts/check-assets.mjs                  # 4. textures referenced by each tier must exist
 ```
 
-Check 2 exists because a missing translation key **fails silently** — `t()`
+Check 3 exists because a missing translation key **fails silently** — `t()`
 falls back to the Chinese table, so an untranslated English string is invisible
-until someone reads the UI. Check 3 exists because texture paths are assembled
+until someone reads the UI. Check 4 exists because texture paths are assembled
 from strings, and a typo there just quietly degrades one planet to procedural.
 Both scripts parse `main.js` / `i18n.js` rather than duplicating their tables,
 so they stay honest when the data changes.
+
+Check 2 exists for the same reason: a simplified character in a comment is
+invisible to every other tool. Its character list comes from the Unicode Unihan
+database intersected with Big5 (Taiwan's standard encoding), which is why it is
+not a hand-maintained list — the hand-maintained list in use while writing this project missed
+U+7EBF, U+9690 and U+9009, all three of which shipped in the same commit and
+stayed undetected until the rule was written as a program. Two known trap
+classes are excluded by rule rather
+than by hand: characters whose traditional and simplified forms are the same
+glyph (so 系統 and 一致 are not flagged), and characters Big5 can encode. The
+list lives in `scripts/simp-chars.txt` so CI needs no network; regenerate it
+with `node scripts/gen-simp-chars.mjs`.
 
 Serve the directory and edit; reload picks everything up.
 
@@ -562,7 +683,7 @@ the same approach has caught every subtle regression here so far.
 Small, focused PRs are welcome. A few notes that will save you time:
 
 - **No build step means no build to fix.** There is no bundler, linter or test
-  framework; the three CI checks above are the whole gate. Keep it that way
+  framework; the four CI checks above are the whole gate. Keep it that way
   unless there is a strong reason.
 - **`p.name` is a Chinese logic key, not a display string.** Comparisons like
   `p.name === '地球'` gate the night-lights shader, `'土星'` gates the ring, and

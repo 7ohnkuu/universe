@@ -12,3 +12,7 @@ textures/8k_*
 # --- 備援: 本專案為純靜態站點, 無構建產物 ---
 node_modules/
 dist/
+
+# --- Vercel: CLI 本機狀態 (專案 id 等), 不該提交 ---
+#     由 `vercel` 指令自動加入本行; 設定檔 vercel.json / .vercelignore 則要提交。
+.vercel

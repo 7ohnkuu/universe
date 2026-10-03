@@ -1,0 +1,27 @@
+# Vercel 部署排除清單 (語法同 .gitignore, 但只對 Vercel 生效)
+#
+# 為什麼需要: textures/8k_* 已在 .gitignore 裡, 所以「Git 整合」部署根本不會看到它們。
+# 但若改用 `vercel` CLI 從本機目錄部署, 這 68 MB 會被一併上傳 —— 不只是浪費,
+# 更會造成線上內容與倉庫不一致 (本機有 8k, 倉庫沒有), 且總量逼近 Hobby 的
+# 100 MB 源檔上限。列在這裡是雙重保險。
+#
+# 註: 8k 屬選用層, 缺檔時 app 會降級成程序化貼圖, 不影響啟動。
+textures/8k_*
+
+# 倉庫裡不該出現在線上站點的東西
+# (.git 與 vercel.json 由 Vercel 自己排除, 列在此處為雙重保險)
+.git
+vercel.json
+plans/
+README.md
+LICENSE
+.vercelignore
+
+# 僅供倉庫與 CI 使用, 執行期完全不會引用。
+# 不排除的話它們在部署後的站點上直接可讀 (已實測 /.github/workflows/ci.yml 與 /scripts/* 回 200)
+.github/
+scripts/
+docs/
+
+# 作業系統殘留
+.DS_Store

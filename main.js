@@ -615,7 +615,7 @@ async function upgradePlanet(p, mat, gen){
           if (mat.emissiveMap) mat.emissiveMap.dispose();
           mat.emissiveMap = lights; mat.emissive.set(0xffb46a); mat.emissiveIntensity = 2.0;
         }
-        sp.dispose();                              // 源圖只被 canvas 管线消費, 不進 GPU -> 立即釋放
+        sp.dispose();                              // 源圖只被 canvas 管線消費, 不進 GPU -> 立即釋放
         mat.needsUpdate = true; T.spec = u.spec;
       }
     }
@@ -1163,7 +1163,7 @@ renderer.domElement.addEventListener('pointerup', e => {
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects(clickable, false);
-  // r160 Raycaster 不看 visible -> 隐藏的黑洞仍可被命中, 這裡手動過濾 (M1)
+  // r160 Raycaster 不看 visible -> 隱藏的黑洞仍可被命中, 這裡手動過濾 (M1)
   const hit = hits.find(h => h.object.userData.focusIndex !== undefined &&
     !(h.object.userData.focusIndex === -3 && !bhOn));
   if (hit) focusOn(hit.object.userData.focusIndex);

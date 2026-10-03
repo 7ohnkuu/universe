@@ -8,7 +8,7 @@
 //  ⚠ 下面的路徑規則必須與 main.js 的 planetDay() / earthTex() / ringTex() /
 //    moonTex() 保持一致。改了那邊的命名, 這裡要同步 (兩邊都有註解提醒)。
 //
-//  8k 為选用 (未提交, 見 scripts/fetch-textures.sh) -> 缺檔只警告, 不讓 CI 紅。
+//  8k 為選用 (未提交, 見 scripts/fetch-textures.sh) -> 缺檔只警告, 不讓 CI 紅。
 //  2k / 4k 是倉庫自帶的, 缺任何一個就是錯。
 // =============================================================================
 import { readFileSync, existsSync } from 'node:fs';

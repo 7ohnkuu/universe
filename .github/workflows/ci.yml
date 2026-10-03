@@ -1,8 +1,10 @@
 name: CI
 
 # 這個專案沒有構建步驟, 也沒有 bundler / linter / 測試框架。
-# 唯一能自動化的門檻就是「兩個 JS 檔必須可解析」, 以及「倉庫自帶的靜態資源不壞」。
+# 能自動化的門檻有三類: JS 必須可解析、倉庫自帶的靜態資源不壞、
+# 以及文案必須是繁體中文 (zh-TW, 本專案唯一的書寫語言)。
 # 保持最小: 門檻少而確實會跑, 勝過一堆從不執行的檢查。
+# 四個檢查腳本全部離線執行, 不抓網路。
 
 on:
   push:
@@ -24,6 +26,10 @@ jobs:
         run: |
           node --check main.js
           node --check i18n.js
+          for f in scripts/*.mjs; do node --check "$f"; done
+
+      - name: Chinese text must be Traditional (zh-TW)
+        run: node scripts/check-lang.mjs
 
       - name: i18n dictionaries must have identical keys
         run: node scripts/check-i18n.mjs
