@@ -1,5 +1,7 @@
 # Solar System · Black Hole Gravitational Lensing
 
+[![CI](https://github.com/7ohnkuu/universe/actions/workflows/ci.yml/badge.svg)](https://github.com/7ohnkuu/universe/actions/workflows/ci.yml)
+
 **太陽系 · 黑洞引力透鏡** — a real-time, browser-based solar system built on
 [three.js](https://threejs.org): eight planets on **true Keplerian orbits**
 (Kepler's equation solved every frame), plus an external black hole whose
