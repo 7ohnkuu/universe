@@ -37,6 +37,8 @@ click-to-fly-and-track · zh-TW / English UI.
 - [Textures](#textures)
 - [Internationalization](#internationalization)
 - [Auto-hiding UI](#auto-hiding-ui)
+- [Loading](#loading)
+- [Not running while you are away](#not-running-while-you-are-away)
 - [Performance notes](#performance-notes)
 - [Browser support](#browser-support)
 - [Deployment](#deployment)
@@ -263,12 +265,22 @@ expands to. See `applyWrapLighting()` in `main.js`.
 Touch is first-class: single finger orbits, pinch zooms, and the control panel
 and legend retract on touch devices too.
 
-There are **no keyboard shortcuts** for the simulation. Every control is
-reachable by pointer and is a real `<button>` / `<select>`, so keyboard and
-screen-reader users navigate the standard focus order (the panel is `aria`
-labeled and its collapse/expand state is exposed via `aria-expanded` /
-`aria-pressed`). Adding hotkeys is a reasonable first contribution — see
-[Contributing](#contributing).
+### Keyboard
+
+| Key | Action |
+|---|---|
+| Space | Pause / resume |
+| `[` `]` | Speed down / up |
+| `1`–`8` | Fly to Mercury…Neptune |
+| `0` / `9` | Fly to the Sun / the black hole |
+| `R` | Reset the view |
+| `L` `O` `B` `G` | Toggle labels / orbits / black hole / lensing |
+
+Every shortcut calls the same handler as the corresponding button, so the two
+paths cannot drift apart. They stand down while a form control has focus — Space
+on a focused slider or button belongs to that control, not to the simulation —
+and `Ctrl`/`Cmd`/`Alt` combinations are left to the browser. The panel's hint
+block lists them, and hides itself on touch devices.
 
 Clicking a body triggers an animated fly-in that is interruptible — grabbing the
 camera mid-flight cancels the approach instead of fighting you for control.
@@ -464,6 +476,31 @@ recall pill must not either (verified) — and the panel slides *upward* instead
 of sideways, since it is full-width across the top there.
 
 ---
+
+## Loading
+
+The overlay reports real **byte** progress, not just a file count — texture sizes
+in this project span 4 KB to 3.6 MB, so counting files badly misrepresents the
+wait on a 21.8 MB first load.
+
+Three.js r160's `ImageBitmapLoader` accepts an `onProgress` callback but never
+calls it (it goes straight to `fetch().blob()`), so `loadTex()` uses a small
+`fetch` + `ReadableStream` reader of its own. That also means progress works when
+a response has no `Content-Length`.
+
+Files are requested concurrently and a browser opens only ~6 per origin, so the
+files still queued have no size yet. The bar extrapolates from the average size
+of the files that *have* reported and clamps so it never moves backwards; on the
+4k tier it settles on the true 20.5 MB. A failed texture still degrades to the
+procedural map with a `console.warn` — replacing the loader did not change that.
+
+## Not running while you are away
+
+`requestAnimationFrame` is cancelled on `visibilitychange` and restarted when the
+tab returns. This scene renders bloom, twelve bodies and a label layer every
+frame; leaving that running in a background tab only burns battery. The `dt`
+clamp already prevents the hidden gap from becoming a time jump, so resuming
+continues from where it stopped.
 
 ## Performance notes
 

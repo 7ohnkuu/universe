@@ -56,6 +56,9 @@
 
       'loader.init': '載入中 · 初始化星系…',
       'loader.tex': '載入中 · 貼圖 {done}/{total}',
+      'loader.texBytes': '載入中 · 貼圖 {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
+      'loader.bar': '載入進度',
+      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡',
 
       'label.bh': '黑洞 (引力透鏡)',
       'opt.bh': '黑洞',
@@ -118,6 +121,9 @@
 
       'loader.init': 'Loading · building the system…',
       'loader.tex': 'Loading · textures {done}/{total}',
+      'loader.texBytes': 'Loading · textures {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
+      'loader.bar': 'Loading progress',
+      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing',
 
       'label.bh': 'Black hole (lensing)',
       'opt.bh': 'Black hole',

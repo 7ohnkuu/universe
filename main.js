@@ -525,32 +525,78 @@ function ringTex(){ return TEX_BASE + prefix() + 'saturn_ring_alpha.png'; }
 function moonTex(){ return TEX_BASE + prefix() + 'moon.jpg'; }
 
 // 離主執行緒解碼 (ImageBitmapLoader: createImageBitmap 在瀏覽器執行緒池解 JPEG); 不支援時回退 TextureLoader
-const texLoader = new THREE.TextureLoader();
+const texLoader = new THREE.TextureLoader();   // 僅供無 createImageBitmap 的舊瀏覽器退回用
 texLoader.crossOrigin = 'anonymous';
-const bmpLoader = new THREE.ImageBitmapLoader();
-bmpLoader.crossOrigin = 'anonymous';
-// bitmap 解碼在瀏覽器執行緒池; 方向與 GPU UNPACK_FLIP_Y 路徑保持和 TextureLoader 一致 (不預翻轉)
-bmpLoader.setOptions({ premultiplyAlpha: 'none' });
 let loadTotal = 0, loadDone = 0;
-// 載入進度文字: 進度只在載入階段顯示, 且由本函數獨寫 (el 上的 data-i18n 已卸下),
+// 位元組級進度: 每個檔案各自記錄 {loaded, total}。
+// 為什麼不直接用 loadTotal/loadDone 算百分比: 檔案大小差 6 倍 (月球 3.64 MB 對
+// 小行星盤 4 KB), 用檔案數算會嚴重誤導 —— 前 10 個檔案可能就佔了八成體積。
+// 為什麼 total 會邊跑邊長: 瀏覽器同源最多約 6 個並行請求, 後面的檔案在排隊時
+// 還沒有回應頭, 拿不到 Content-Length。因此以「已知檔案的平均大小 × 檔案總數」
+// 推估應下載量; 隨 headers 陸續到達, 估計值會收斂到真實總量, 而進度條單調不倒退。
+const loadFiles = new Map();
+let loadPctShown = 0;
+function trackBytes(url, e){
+  let f = loadFiles.get(url);
+  if (!f){ f = { loaded: 0, total: 0 }; loadFiles.set(url, f); }
+  if (e){ f.loaded = e.loaded || 0; if (e.total) f.total = e.total; }
+  renderLoaderTex();
+}
+const MB = 1048576;
+// 載入進度文字: 進度只在載入階段顯示, 且由本函數獨寫 (msg 上的 data-i18n 已卸下),
 // 所以換語言時進度不會被靜態字典蓋掉。
 function renderLoaderTex(){
   const el = document.getElementById('loader');
   if (!el || el.classList.contains('done')) return;
   if (!el.dataset.tex) return;                 // 尚未進入貼圖階段 → 維持「初始化星系…」
   if (el.dataset.msg) return;                  // 錯誤訊息優先, 不搶它的文字
-  el.textContent = t('loader.tex', { done: loadDone, total: loadTotal });
+  const msgEl = el.querySelector('#loaderMsg');
+  let loaded = 0, known = 0, files = 0;
+  for (const f of loadFiles.values()){
+    loaded += f.loaded;
+    if (f.total > 0){ known += f.total; files++; }
+  }
+  const hasBytes = files > 0 && loaded > 0;
+  let pct = 0;
+  if (loadTotal > 0 && loadDone >= loadTotal) pct = 100;
+  else if (hasBytes){
+    // 應下載量 = max(已知總量, 平均大小 × 檔案總數); 後者補上排隊中檔案的份額
+    const est = Math.max(known, (known / files) * loadTotal);
+    pct = est > 0 ? (loaded / est) * 100 : 0;
+  } else {
+    pct = loadTotal > 0 ? (loadDone / loadTotal) * 100 : 0;
+  }
+  pct = Math.max(0, Math.min(100, pct));
+  loadPctShown = Math.max(loadPctShown, pct);   // 單調: 估算值修正時不讓進度條倒退
+  const bar = el.querySelector('#loaderBar');
+  const fill = el.querySelector('#loaderFill');
+  if (bar && fill){
+    bar.classList.add('on');
+    fill.style.width = loadPctShown.toFixed(1) + '%';
+    bar.setAttribute('aria-valuenow', String(Math.round(loadPctShown)));
+    // 位元組已知時才顯示 MB; 只有檔案數時顯示舊格式, 不假裝知道大小
+    if (msgEl){
+      msgEl.textContent = hasBytes
+        ? t('loader.texBytes', { done: loadDone, total: loadTotal,
+            mb: (loaded / MB).toFixed(1), mbTotal: (Math.max(known, (known / files) * loadTotal) / MB).toFixed(1),
+            pct: Math.round(loadPctShown) })
+        : t('loader.tex', { done: loadDone, total: loadTotal });
+    }
+  }
 }
 function loadTex(url, srgb){
   loadTotal++;
+  trackBytes(url, null);                    // 先登記, 讓總數在第一個回應到達前就是準的
   // 注意: 參數不叫 t —— 那會遮蔽外層的翻譯函數 t()
   const finish = tex => {
     loadDone++;
     const el = document.getElementById('loader');
     if (el){
       // 進入「貼圖進度」階段: 卸下 data-i18n, 改由 renderLoaderTex() 全權接管,
-      // 否則換語言時 applyStatic() 會把進度條打回「初始化星系…」
-      el.removeAttribute('data-i18n');
+      // 否則換語言時 applyStatic() 會把進度打回「初始化星系…」
+      // (data-i18n 現在掛在 #loaderMsg 上, 不是 #loader)
+      const msgEl = el.querySelector('#loaderMsg');
+      if (msgEl) msgEl.removeAttribute('data-i18n');
       el.dataset.tex = '1';
       renderLoaderTex();
     }
@@ -559,13 +605,49 @@ function loadTex(url, srgb){
   return new Promise(res => {
     const fail = () => { console.warn(t('err.texFail'), url); res(finish(null)); };
     const tag = tex => { tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; tex.anisotropy = MAX_ANISO; res(finish(tex)); };
-    if (typeof createImageBitmap === 'function'){
-      bmpLoader.load(url, bmp => { const tex = new THREE.Texture(bmp); tex.needsUpdate = true; tag(tex); },
-                     undefined, fail);
-    } else {
-      texLoader.load(url, tag, undefined, fail);
-    }
+    loadBitmap(url).then(bmp => { const tex = new THREE.Texture(bmp); tex.needsUpdate = true; tag(tex); }, fail);
   });
+}
+// 帶位元組進度的貼圖載入。
+// 為什麼不用 ImageBitmapLoader: 它的 load() 雖接受 onProgress, 內部卻直接
+// fetch().blob() 而從不呼叫它 (three r160 實測), 所以拿不到任何位元組資訊。
+// 這裡自己抓: 迴圈的 ReadableStream 可以逐 chunk 回報, 即使沒有 Content-Length
+// (chunked 回應) 也能累加實際下載量。
+async function loadBitmap(url){
+  // 無 createImageBitmap 的舊瀏覽器: 退回 three 的 ImageLoader (它有進度回報)。
+  // 進度精度較差 (整張完成才更新), 但功能不受影響。
+  if (typeof createImageBitmap !== 'function'){
+    return new Promise((ok2, no) => {
+      texLoader.load(url, img => { trackBytes(url, { loaded: 1, total: 1 }); ok2(img); },
+        e => trackBytes(url, e), () => no(new Error('load failed: ' + url)));
+    });
+  }
+  const res = await fetch(url, { credentials: 'same-origin' });
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + url);
+  const lenHeader = res.headers.get('content-length');
+  const declared = lenHeader ? parseInt(lenHeader, 10) : 0;
+  if (declared) trackBytes(url, { loaded: 0, total: declared });   // 先拿到大小, 進度條起步就準
+  // body 為 null 表示這是 204/205 或 HEAD 類回應
+  if (!res.body || !res.body.getReader){
+    const blob = await res.blob();
+    const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    trackBytes(url, { loaded: blob.size, total: blob.size });
+    return bmp;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;){
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.byteLength;
+    trackBytes(url, { loaded: got, total: declared });
+  }
+  trackBytes(url, { loaded: got, total: declared || got });
+  const bmp = await createImageBitmap(new Blob(chunks, { type: res.headers.get('content-type') || 'image/jpeg' }),
+                                       { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  return bmp;
 }
 // 將地球 specular 貼圖反相為 roughness (海洋白=反光 -> roughness 低)
 function invertToRoughness(tex){
@@ -1047,6 +1129,50 @@ $('reset').addEventListener('click', () => {
 $('focus').addEventListener('change', e => { focusOn(parseInt(e.target.value)); });
 
 // =============================================================================
+//  鍵盤快捷鍵
+//  全部沿用既有控制項的 click() / handler, 不另外實作一份狀態邏輯 ——
+//  否則滑鼠與鍵盤兩條路徑遲早會不一致 (例如按鈕的 aria-pressed 忘了同步)。
+//  快捷鍵對應面板上的按鈕, 面板底部有一行對照表。
+// =============================================================================
+function isTypingTarget(el){
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || el.isContentEditable === true;
+}
+function nudgeSpeed(dir){
+  const inp = $('speed');
+  const step = 0.05;                       // 滑桿本身的 step 是 0.01, 鍵盤用大一點的步長
+  let v = parseFloat(inp.value) + dir * step;
+  v = Math.max(parseFloat(inp.min), Math.min(parseFloat(inp.max), v));
+  inp.value = String(v);
+  inp.dispatchEvent(new Event('input', { bubbles: true }));  // 沿用既有 handler 更新 simSpeed
+}
+addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;   // 不搶瀏覽器/作業系統快捷鍵
+  const typing = isTypingTarget(e.target);
+  const onControl = typing || (e.target && e.target.closest && e.target.closest('button'));
+  const k = e.key;
+  // 空白鍵: 焦點在按鈕上時讓瀏覽器原生的 click 處理, 否則會同時觸發「切換」與「暫停」
+  if (k === ' ' || k === 'Spacebar'){
+    if (onControl) return;
+    e.preventDefault(); $('pause').click(); return;
+  }
+  if (typing) return;                       // 其餘快捷鍵在輸入/選單操作中一律不生效
+  if (k >= '1' && k <= '8'){ e.preventDefault(); focusOn(parseInt(k, 10) - 1); return; }
+  switch (k){
+    case '0': e.preventDefault(); focusOn(-2); break;          // 太陽
+    case '9': e.preventDefault(); focusOn(-3); break;          // 黑洞
+    case '[': case '-': e.preventDefault(); nudgeSpeed(-1); break;
+    case ']': case '=': case '+': e.preventDefault(); nudgeSpeed(1); break;
+    case 'r': case 'R': e.preventDefault(); $('reset').click(); break;
+    case 'l': case 'L': e.preventDefault(); $('tLabels').click(); break;
+    case 'o': case 'O': e.preventDefault(); $('tOrbits').click(); break;
+    case 'b': case 'B': e.preventDefault(); $('tBH').click(); break;
+    case 'g': case 'G': e.preventDefault(); $('tLens').click(); break;
+  }
+});
+
+// =============================================================================
 //  面板自動收回: 不互動時滑出螢幕, 讓畫面可看範圍最大化。
 //  兩種方式收回: (1) 手動按 ✕  (2) 閒置 6 秒且指標不在面板上。
 //  📌 釘選可關閉自動收回 (只保留手動 ✕), 選擇記在 localStorage。
@@ -1295,8 +1421,17 @@ function updatePlanet(o, dt){
 let lensSmooth = 2.5;          // 透鏡強度包絡 (L12: 開關時淡入淡出而非瞬變)
 const _desired = new THREE.Vector3();
 
+// 分頁隱藏時停掉 rAF: 這個場景每幀都在跑 bloom + 12 顆行星 + 標籤, 背景全速執行
+// 只會白燒電池與 CPU, 使用者卻完全看不到。恢復時不補幀 —— dt 本來就夾在 0.05,
+// 不會因為中斷而讓時間跳一大段。
+let rafId = 0;
+function startLoop(){ if (!rafId && !document.hidden) rafId = requestAnimationFrame(animate); }
+function stopLoop(){ if (rafId){ cancelAnimationFrame(rafId); rafId = 0; } }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopLoop(); else { clock.getDelta(); startLoop(); } // 丟棄隱藏期間累積的時間
+});
 function animate(){
-  requestAnimationFrame(animate);
+  rafId = requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   if (!paused) simTime += dt * simSpeed;
 
@@ -1451,5 +1586,5 @@ async function hideLoader(){
   loaderEl.addEventListener('transitionend', () => { loaderEl.style.display = 'none'; }, { once: true });
   setTimeout(() => { loaderEl.style.display = 'none'; }, 400); // 保底: transitionend 未觸發時也會移除
 }
-animate();
+startLoop();
 hideLoader();
