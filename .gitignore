@@ -9,6 +9,12 @@ Thumbs.db
 #     2k 與 4k 已提交, 預設 4k 可直接執行, 缺 8k 不影響啟動。
 textures/8k_*
 
+# --- 個人檔案 / 編碼代理對話紀錄: 絕不進公開倉庫 ---
+resume.txt
+*.session.txt
+conversation*.txt
+chat*.log
+
 # --- 備援: 本專案為純靜態站點, 無構建產物 ---
 node_modules/
 dist/
