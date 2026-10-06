@@ -36,6 +36,7 @@ click-to-fly-and-track · zh-TW / English UI.
   - [Keyboard](#keyboard)
 - [The Dyson shell](#the-dyson-shell)
 - [The wormhole](#the-wormhole)
+- [Moons, and a comet](#moons-and-a-comet)
 - [Project layout](#project-layout)
 - [Textures](#textures)
 - [Internationalization](#internationalization)
@@ -462,6 +463,54 @@ folding the outer annulus back over the throat). The shipped mapping is
 continuous and bounded (`rr = a·(dist/a)^0.8` inside the throat, deflection
 clamped to half the gap outside), which removes them; the regression test
 compares lens-on versus lens-off pixels so a silent no-op pass would fail.
+
+## Moons, and a comet
+
+Six moons join the two already present, all on **real orbital periods**, which
+is what makes the dynamics section of this project rather than a diorama:
+
+- **The Galilean moons** — Io (1.769 d), Europa (3.551 d), Ganymede (7.155 d),
+  Callisto (16.689 d). Because the periods are the true ones, the Laplace
+  resonance falls out of the integration: the combination
+  `n_Io − 3·n_Europa + 2·n_Ganymede ≈ −1.7×10⁻⁵` per day, i.e. the 4:2:1
+  commensurability holds to five decimal places. The test suite measures the
+  Io:Europa angular-velocity ratio as 2.007 against the true 2.007.
+- **Enceladus and Titan** around Saturn. Enceladus carries a south-polar
+  plume of GPU particles — the tidal-heating-driven water-ice jets Cassini
+  measured, which feed Saturn's E ring.
+- All moons are **tidally locked** by construction: they do not spin in their
+  pivot frame, so the same face always points at the host.
+
+The **comet** runs a high-eccentricity Keplerian orbit (e = 0.967, P = 75.3 yr,
+Halley-like), so it visibly accelerates near perihelion — equal areas in equal
+times, the oldest dynamics in the book. Its two tails are physically distinct:
+the blue ion tail points almost exactly anti-sunward (solar-wind drag;
+measured alignment dot = 1.0000), while the dust tail curves behind along the
+trajectory (radiation pressure plus initial velocity). Both fade out away from
+perihelion, because sublimation — not decoration — drives them: measured
+opacity 1.00 at perihelion, 0.00 at aphelion.
+
+### Texture provenance and the disc-to-cylindrical conversion
+
+Moon textures are **NASA/JPL public-domain imagery** (US government work):
+Ganymede uses a true equirectangular global map (PIA03781); Titan a true
+equirectangular radar map (PIA19658, cropped of its title and axes); Io, Europa
+and Callisto use full-disc mosaics (PIA00292 centre disc, PIA00016, PIA00457).
+
+A full disc is an orthographic view, not an equirectangular map, so it cannot
+be wrapped onto a sphere directly. The conversion runs at load time: a
+trimmed Kasa circle fit recovers the true disc centre and radius from the
+illuminated limb (a plain bounding box fails on partially lit mosaics, and the
+terminator is an ellipse, not a circle, so it is rejected by residual
+trimming); each output texel is then inverse-projected, with the unobserved
+far hemisphere folded back and night-side samples mirrored to the opposite
+side so lighting is not baked into albedo. Polar rows are relaxed toward the
+pole mean, because an equirectangular pole is a stretched line that otherwise
+converges into a radial starburst when seen from above the ecliptic.
+
+This is an honest approximation, not a fabrication: the far hemisphere of a
+disc mosaic is mirror-filled, and the README says so. Where a true global map
+existed (Ganymede, Titan) it is used unmodified apart from polar relaxation.
 
 ---
 

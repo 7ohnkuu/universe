@@ -59,6 +59,20 @@ const PLANETS = [
 const DIST_K = 66;
 const distScale = a => Math.pow(a, 0.65) * DIST_K;
 const SUN_R = 16;                 // 太陽視覺半徑
+
+// 衛星資料表: periodD 為真實軌道週期 (天), 故 Io:Europa:Ganymede 的
+// 4:2:1 拉普拉斯共振在模擬中自動成立。aKm/radiusKm 為真實值 (文件用),
+// aF/rF 為相對宿主的壓縮顯示比例 (與距離壓縮同一哲學)。
+// map: 貼圖檔名; mapMode: 'cyl' = 真等距圓柱全球地圖 (NASA PIA03781),
+//      'band' = 球面鑲嵌取赤道帶鏡像拼接 (來源為 NASA 球面視角圖, 如實標註)。
+const MOONS = [
+  { host:'木星', name:'Io',       periodD:1.769,  aKm:421700,  radiusKm:1822, aF:2.6, rF:0.105, color:[230,200,90],  map:'io',       mapMode:'disc' },
+  { host:'木星', name:'Europa',   periodD:3.551,  aKm:671034,  radiusKm:1561, aF:3.3, rF:0.090, color:[210,200,180], map:'europa',   mapMode:'disc' },
+  { host:'木星', name:'Ganymede', periodD:7.155,  aKm:1070412, radiusKm:2634, aF:4.2, rF:0.148, color:[150,140,130], map:'ganymede', mapMode:'cyl'  },
+  { host:'木星', name:'Callisto', periodD:16.689, aKm:1882709, radiusKm:2410, aF:5.3, rF:0.136, color:[120,110,100], map:'callisto', mapMode:'disc' },
+  { host:'土星', name:'Enceladus',periodD:1.370,  aKm:237948,  radiusKm:252,  aF:3.4, rF:0.055, color:[240,245,250], map:'enceladus',mapMode:'disc', plume:true },
+  { host:'土星', name:'Titan',    periodD:15.945, aKm:1221870, radiusKm:2575, aF:5.0, rF:0.145, color:[220,170,80],  map:'titan',    mapMode:'disc' },
+];
 const JUP_R = 8;                  // 木星視覺半徑 (其餘行星依真實半徑比)
 PLANETS.forEach(p => { p.aDisp = distScale(p.a); p.rDisp = (p.radiusKm / 69911) * JUP_R; p.M0 = Math.random() * TWO_PI; });
 
@@ -623,32 +637,42 @@ async function loadBitmap(url){
         e => trackBytes(url, e), () => no(new Error('load failed: ' + url)));
     });
   }
-  const res = await fetch(url, { credentials: 'same-origin' });
-  if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + url);
-  const lenHeader = res.headers.get('content-length');
-  const declared = lenHeader ? parseInt(lenHeader, 10) : 0;
-  if (declared) trackBytes(url, { loaded: 0, total: declared });   // 先拿到大小, 進度條起步就準
-  // body 為 null 表示這是 204/205 或 HEAD 類回應
-  if (!res.body || !res.body.getReader){
-    const blob = await res.blob();
-    const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-    trackBytes(url, { loaded: blob.size, total: blob.size });
+  // 每請求逾時: 不穩網路下 TCP 可能停滯而不送 RST, fetch 會永遠掛著。
+  // hideLoader 等 Promise.all, 一個掛住的請求會讓覆蓋層永久停留。
+  // 90s 遠大於實測的單檔最久下載 (冷載入全頁 27–80s, 單檔更短), 不會誤殺慢連線。
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 90000);
+  try {
+    const res = await fetch(url, { credentials: 'same-origin', signal: ac.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + url);
+    const lenHeader = res.headers.get('content-length');
+    const declared = lenHeader ? parseInt(lenHeader, 10) : 0;
+    if (declared) trackBytes(url, { loaded: 0, total: declared });   // 先拿到大小, 進度條起步就準
+    let bmp;
+    // body 為 null 表示這是 204/205 或 HEAD 類回應
+    if (!res.body || !res.body.getReader){
+      const blob = await res.blob();
+      bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+      trackBytes(url, { loaded: blob.size, total: blob.size });
+    } else {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0;
+      for (;;){
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.byteLength;
+        trackBytes(url, { loaded: got, total: declared });
+      }
+      trackBytes(url, { loaded: got, total: declared || got });
+      bmp = await createImageBitmap(new Blob(chunks, { type: res.headers.get('content-type') || 'image/jpeg' }),
+                                         { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    }
     return bmp;
+  } finally {
+    clearTimeout(timer);   // 涵蓋整個請求 (含 body 串流), 不是只在 headers 後
   }
-  const reader = res.body.getReader();
-  const chunks = [];
-  let got = 0;
-  for (;;){
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    got += value.byteLength;
-    trackBytes(url, { loaded: got, total: declared });
-  }
-  trackBytes(url, { loaded: got, total: declared || got });
-  const bmp = await createImageBitmap(new Blob(chunks, { type: res.headers.get('content-type') || 'image/jpeg' }),
-                                       { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-  return bmp;
 }
 // 將地球 specular 貼圖反相為 roughness (海洋白=反光 -> roughness 低)
 function invertToRoughness(tex){
@@ -746,6 +770,152 @@ async function upgradeRing(ring, gen){
   ring.receiveShadow = true;
   ring.userData.texUrl = url;
 }
+// 衛星貼圖升級。兩種映射模式:
+//   'cyl'  = 真等距圓柱全球地圖 (NASA PIA03781), 直接貼球面。
+//   'disc' = 來源是 NASA 的【正射圓盤鑲嵌】(球面視角), 直接貼球面會嚴重變形,
+//            鏡像拼接則會在極區產生十字假影。正確做法是【逆正射投影展開】:
+//            對每個輸出經緯度, 反投影回圓盤座標取樣 (近半球); 遠半球無資料,
+//            以經度鏡像補足使接縫連續。來源與轉換在 README 如實標註。
+// 極區平滑: 等距圓柱貼圖的極列是一條被拉伸的線, 從極向看會收斂成放射狀
+// 條輻 (幾何上正確, 但視覺上是噪訊)。標準做法: 載入時把極區若干列
+// 向極點平均色收收, 消除拉伸條輻而保留中緯度細節。
+function smoothPoles(cv){
+  const g = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const k = Math.max(4, Math.round(H * 0.07));
+  for (const top of [true, false]){
+    const rows = top ? k : k;
+    // 極點平均色: 取最靠極的 2 列平均
+    const d0 = g.getImageData(0, top ? 0 : H - 2, W, 2).data;
+    let r = 0, gg = 0, bb = 0;
+    for (let i = 0; i < d0.length; i += 4){ r += d0[i]; gg += d0[i+1]; bb += d0[i+2]; }
+    const n = d0.length / 4;
+    r /= n; gg /= n; bb /= n;
+    for (let j = 0; j < rows; j++){
+      const y = top ? j : H - 1 - j;
+      const w = j / rows;                       // 0 在極點 → 1 在帶邊
+      const d = g.getImageData(0, y, W, 1);
+      for (let i = 0; i < d.data.length; i += 4){
+        d.data[i]   = d.data[i]   * w + r  * (1 - w);
+        d.data[i+1] = d.data[i+1] * w + gg * (1 - w);
+        d.data[i+2] = d.data[i+2] * w + bb * (1 - w);
+      }
+      g.putImageData(d, 0, y);
+    }
+  }
+  return cv;
+}
+function discToEquirect(img){
+  const W = 1024, H = 512;
+  const src = document.createElement('canvas'); src.width = img.width; src.height = img.height;
+  const sg = src.getContext('2d'); sg.drawImage(img, 0, 0);
+  const sd = sg.getImageData(0, 0, img.width, img.height).data;
+  // 偵測圓盤: 來源常是【部分照明】的圓盤鑲嵌 (夜側為黑), 照亮區的 bbox
+  // 會偏離真實圓盤中心 → 展開出黑色楔形假影。正確做法是對明暗邊界 (limb)
+  // 做圓擬合 (Kasa 最小平方法): 從照亮弧還原真實圓心與半徑。
+  const edgeX = [], edgeY = [];
+  const lum = (x, y) => { const i = (y * img.width + x) * 4; return sd[i] + sd[i+1] + sd[i+2]; };
+  for (let y = 1; y < img.height - 1; y += 2) for (let x = 1; x < img.width - 1; x += 2){
+    if (lum(x, y) > 60 && (lum(x-1,y) <= 60 || lum(x+1,y) <= 60 || lum(x,y-1) <= 60 || lum(x,y+1) <= 60)){
+      edgeX.push(x); edgeY.push(y);
+    }
+  }
+  if (edgeX.length < 50){ return img; }              // 偵測失敗: 退回原圖, 不崩潰
+  // 修剪式 Kasa 圓擬合: 邊界點同時含 limb (圓) 與終端線 (橢圓弧), 後者會污染擬合。
+  // limb 點彼此自洽於同一圓, 終端線點則否 ⇒ 迭代保留殘差最小的 60% 收斂到 limb。
+  let idx = edgeX.map((_, i) => i);
+  let cx = 0, cy = 0, R = 1;
+  for (let iter = 0; iter < 6; iter++){
+    let Sx=0,Sy=0,Sxx=0,Syy=0,Sxy=0,Sz=0,Sxz=0,Syz=0; const N=idx.length;
+    if (N < 20) break;
+    for (const i of idx){
+      const x=edgeX[i], y=edgeY[i], z=x*x+y*y;
+      Sx+=x; Sy+=y; Sxx+=x*x; Syy+=y*y; Sxy+=x*y; Sz+=z; Sxz+=x*z; Syz+=y*z;
+    }
+    const A=[[Sxx,Sxy,Sx],[Sxy,Syy,Sy],[Sx,Sy,N]], B=[-Sxz,-Syz,-Sz];
+    const det = A[0][0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1]) - A[0][1]*(A[1][0]*A[2][2]-A[1][2]*A[2][0]) + A[0][2]*(A[1][0]*A[2][1]-A[1][1]*A[2][0]);
+    if (Math.abs(det) < 1e-9) break;
+    const D = (B[0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1]) - A[0][1]*(B[1]*A[2][2]-A[1][2]*B[2]) + A[0][2]*(B[1]*A[2][1]-A[1][1]*B[2])) / det;
+    const E = (A[0][0]*(B[1]*A[2][2]-A[1][2]*B[2]) - B[0]*(A[1][0]*A[2][2]-A[1][2]*A[2][0]) + A[0][2]*(A[1][0]*B[2]-B[1]*A[2][0])) / det;
+    const Ff = (A[0][0]*(A[1][1]*B[2]-B[1]*A[2][1]) - A[0][1]*(A[1][0]*B[2]-B[1]*A[2][0]) + B[0]*(A[1][0]*A[2][1]-A[1][1]*A[2][0])) / det;
+    cx = -D/2; cy = -E/2;
+    R = Math.sqrt(Math.max(1, D*D/4 + E*E/4 - Ff));
+    // 殘差修剪
+    const res = idx.map(i => Math.abs(Math.hypot(edgeX[i]-cx, edgeY[i]-cy) - R));
+    const sorted = [...res].sort((a,b)=>a-b);
+    const thr = sorted[Math.floor(sorted.length * 0.6)];
+    idx = idx.filter((_, k) => res[k] <= thr);
+  }
+  R *= 0.98;                                          // 限縮避免取到圓盤外黑邊
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const out = g.createImageData(W, H), od = out.data;
+  // 照亮區平均色: 夜側取樣的後備值 (避免把照明烘進反照率)
+  let lr=0, lg=0, lb=0, ln=0;
+  for (let i = 0; i < sd.length; i += 16){
+    const L = sd[i] + sd[i+1] + sd[i+2];
+    if (L > 150){ lr += sd[i]; lg += sd[i+1]; lb += sd[i+2]; ln++; }
+  }
+  const avgR = ln ? lr/ln : 128, avgG = ln ? lg/ln : 128, avgB = ln ? lb/ln : 128;
+  // 夜側門檻用【相對值】: 來源的夜側常是暗綠/暗褐而非純黑 (Io 即如此),
+  // 固定門檻 45 會把夜側當成有效資料, 展開出暗色楔形。
+  const nightThr = Math.max(45, (avgR + avgG + avgB) * 0.30);
+  const samp = (lam, sgn, lat) => {
+    const sx = Math.round(cx + Math.cos(lat) * Math.sin(lam) * R * sgn);
+    const sy = Math.round(cy - Math.sin(lat) * R);
+    if (sx < 0 || sy < 0 || sx >= img.width || sy >= img.height) return null;
+    const i = (sy * img.width + sx) * 4;
+    return (sd[i] + sd[i+1] + sd[i+2] > nightThr) ? i : null;   // 夜側/缺資料
+  };
+  for (let py = 0; py < H; py++){
+    const lat = (0.5 - (py + 0.5) / H) * Math.PI;
+    for (let px = 0; px < W; px++){
+      const lon = ((px + 0.5) / W - 0.5) * TWO_PI;          // -π..π
+      const sgn = lon >= 0 ? 1 : -1;
+      const al = Math.abs(lon);
+      const lam = al > Math.PI / 2 ? Math.PI - al : al;      // 遠半球折回, 保持接縫連續
+      let i = samp(lam, sgn, lat);
+      if (i === null) i = samp(lam, -sgn, lat);              // 夜側 → 鏡像到另一側
+      const di = (py * W + px) * 4;
+      if (i !== null){ od[di] = sd[i]; od[di+1] = sd[i+1]; od[di+2] = sd[i+2]; }
+      else { od[di] = avgR; od[di+1] = avgG; od[di+2] = avgB; }  // 仍無資料 → 平均色
+      od[di+3] = 255;
+    }
+  }
+  g.putImageData(out, 0, 0);
+  return cv;
+}
+async function upgradeMoonTex(mesh, mi, gen){
+  const md = MOONS[mi];
+  const url = TEX_BASE + md.map + '.jpg';
+  const T = mesh.userData;
+  if (T.texUrl === url) return;
+  const t = await loadTex(url, true);
+  if (gen !== texGen){ t && t.dispose(); return; }
+  if (!t) return;
+  let tex = t;
+  if (md.mapMode === 'disc'){
+    const cv = smoothPoles(discToEquirect(t.image));
+    t.dispose();
+    tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = MAX_ANISO;
+  } else {
+    // 真等距圓柱同樣需要極區平滑 (PIA03781 的極列也是拉伸的)
+    const cv = document.createElement('canvas');
+    cv.width = t.image.width; cv.height = t.image.height;
+    cv.getContext('2d').drawImage(t.image, 0, 0);
+    smoothPoles(cv);
+    t.dispose();
+    tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = MAX_ANISO;
+  }
+  const mat = mesh.material;
+  if (mat.map) mat.map.dispose();
+  mat.map = tex; mat.color.set(0xffffff); mat.needsUpdate = true;
+  T.texUrl = url;
+}
 async function upgradeMoon(moon, gen){
   const url = moonTex();
   const T = moon.userData;
@@ -769,6 +939,7 @@ function reloadTextures(){
     jobs.push(upgradePlanet(o.data, o.mesh.material, gen));
     if (o.ring) jobs.push(upgradeRing(o.ring, gen));
     if (o.moon) jobs.push(upgradeMoon(o.moon, gen));
+    for (const mo of (o.moons || [])) jobs.push(mo.upgrade(gen));
   }
   return Promise.all(jobs);
 }
@@ -895,6 +1066,69 @@ PLANETS.forEach((p, idx) => {
     p._moonPivot = moonPivot;
   }
 
+  // 伽利略衛星 / 土星衛星: 真實軌道週期比 ⇒ 拉普拉斯共振自動成立
+  // (Io:Europa:Ganymede = 1.769:3.551:7.155 天 ≈ 4:2:1)
+  // 顯示半徑/軌道為壓縮值 (與行星距離壓縮同一哲學), 真實比例存於 radiusKm/aKm。
+  // 潮汐鎖定: 衛星在 pivot 框架內不自轉 ⇒ 同一面永遠朝向宿主。
+  const moons = [];
+  for (let mi = 0; mi < MOONS.length; mi++){
+    const md = MOONS[mi];
+    if (md.host !== p.name) continue;
+    const mMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(md.color[0]/255, md.color[1]/255, md.color[2]/255), roughness: 1.0 });
+    applyWrapLighting(mMat, 0.08, null);
+    mMat.envMapIntensity = 0.12;
+    const mMesh = new THREE.Mesh(new THREE.SphereGeometry(p.rDisp * md.rF, 48, 48), mMat);
+    mMesh.castShadow = true; mMesh.receiveShadow = true;
+    mMesh.userData.mi = mi;
+    const pivot = new THREE.Group();
+    mMesh.position.x = p.rDisp * md.aF;
+    pivot.add(mMesh);
+    obj.add(pivot);
+    const mo = { data: md, mesh: mMesh, pivot, mi,
+                 periodYr: md.periodD / 365.25, M0: (mi * 1.7) % TWO_PI };
+    // Enceladus 南極噴羽: 真實物理 —— 潮汐加熱驅動的水冰噴流, 餵養土星 E 環
+    if (md.plume){
+      const N = 220, pos = new Float32Array(N * 3), seed = new Float32Array(N);
+      for (let i = 0; i < N; i++){
+        const th = Math.random() * TWO_PI, rr = Math.random() * 0.5;
+        pos[i*3] = Math.cos(th) * rr; pos[i*3+1] = -1 - Math.random() * 3.2; pos[i*3+2] = Math.sin(th) * rr;
+        seed[i] = Math.random();
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+      const pm = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uSize: { value: p.rDisp * md.rF * 26 } },
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+        vertexShader: `attribute float aSeed; uniform float uTime; uniform float uSize; varying float vA;
+          void main(){
+            float t = fract(aSeed + uTime * 0.35);          // 每顆粒自己的噴發週期
+            vec3 p = position; p.y *= t;                     // 沿南極軸向外噴
+            p.xz *= (0.4 + t * 1.4);                         // 錐形擴散
+            vA = (1.0 - t) * smoothstep(0.0, 0.15, t);       // 出生淡入、消散淡出
+            vec4 mv = modelViewMatrix * vec4(p, 1.0);
+            gl_PointSize = uSize * (0.35 + 0.65 * t) / max(-mv.z, 0.1);
+            gl_Position = projectionMatrix * mv;
+          }`,
+        fragmentShader: `varying float vA;
+          void main(){
+            vec2 q = gl_PointCoord - 0.5;
+            float d = length(q);
+            float a = smoothstep(0.5, 0.05, d) * vA * 0.5;
+            gl_FragColor = vec4(vec3(0.85, 0.92, 1.0), a);
+          }`,
+      });
+      const pts = new THREE.Points(g, pm);
+      pts.scale.setScalar(p.rDisp * md.rF);
+      mMesh.add(pts);
+      mo.plumeMat = pm;
+    }
+    moons.push(mo);
+    mo.upg = upgradeMoonTex(mMesh, mi, texGen);
+    mo.upgrade = g => upgradeMoonTex(mMesh, mi, g);
+  }
+  if (moons.length) p._moons = moons;
+
   // 軌道線
   const SEG = 256, op = new Float32Array((SEG+1)*3);
   for (let i=0;i<=SEG;i++){
@@ -914,7 +1148,8 @@ PLANETS.forEach((p, idx) => {
   const label = new CSS2DObject(div); label.position.set(0, p.rDisp*1.6, 0); obj.add(label);
 
   planetObjs.push({ data:p, obj, mesh, orbitBase:m, orbitLine, labelEl:div,
-                    ring: p.ring ? ring : null, moon: p.moon ? moon : null });
+                    ring: p.ring ? ring : null, moon: p.moon ? moon : null,
+                    moons: p._moons || [] });
   const opt = new Option(pname(p.name), String(idx));
   focusSelect.add(opt);
   focusOptions.push({ opt, name: p.name });
@@ -1084,6 +1319,119 @@ function buildWormhole(){
   WH.group = g;
 }
 buildWormhole();
+
+// =============================================================================
+//  彗星 (雙尾: 離子尾 + 塵尾)
+//
+//  軌道: 高離心率橢圓 (e=0.967, 類哈雷), 真實克卜勒方程求解 ⇒ 近日點附近
+//  明顯加速 (面積速度守恆), 這是彗星動力學最可視化的特徵。
+//
+//  兩尾的物理不同, 方向也不同:
+//  · 離子尾 (藍): 受太陽風磁場拖曳, 幾乎精確背離太陽 (輻射向), 窄而直。
+//  · 塵尾 (黃白): 塵粒受輻射壓與初速影響, 沿軌跡彎曲落後, 寬而彎。
+//  兩者皆以 GPU 粒子 (additive) 實作, 不新增貼圖。
+// =============================================================================
+const COMET = { a: 17.8, e: 0.967, incl: 24 * DEG, periodYr: 75.3,
+                group: null, pos: new THREE.Vector3(), M0: 2.1 };
+let cometTailMat = null, cometDustMat = null;
+
+function buildComet(){
+  const g = new THREE.Group();
+  // 彗核 + 彗髮 (coma)
+  const nucleus = new THREE.Mesh(
+    new THREE.SphereGeometry(0.9, 24, 24),
+    new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 1.0 })
+  );
+  nucleus.userData.focusIndex = -5;
+  clickable.push(nucleus);
+  g.add(nucleus);
+  const coma = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: makeGlowTexture(), color: 0xbfe8ff, transparent: true, opacity: 0.55,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  coma.scale.set(9, 9, 1);
+  g.add(coma);
+  COMET.coma = coma;
+  const div = document.createElement('div'); div.className = 'label comet'; div.textContent = t('label.comet');
+  const label = new CSS2DObject(div); label.position.set(0, 4.5, 0); g.add(label);
+  COMET.label = label;
+
+  // 尾: 兩組 GPU 粒子。粒子在「尾向」局部座標中生成, 每幀由 CPU 更新群組朝向,
+  // 使離子尾指向背日、塵尾落後軌跡 —— 方向由物理決定, 不是固定裝飾。
+  const mkTail = (N, spread, len, col, curve) => {
+    const pos = new Float32Array(N * 3), seed = new Float32Array(N);
+    for (let i = 0; i < N; i++){
+      const t = Math.random();                       // 沿尾的參數 0..1
+      const ang = Math.random() * TWO_PI, rr = Math.random() * spread * (0.25 + t);
+      pos[i*3]   = Math.cos(ang) * rr + curve * t * t;  // 塵尾彎曲項
+      pos[i*3+1] = (Math.random() - 0.5) * spread * 0.6;
+      pos[i*3+2] = -t * len;                            // 尾朝 -Z (背日)
+      seed[i] = t;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uSize: { value: 3.2 }, uCol: { value: new THREE.Color(col) }, uOp: { value: 1 } },
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      vertexShader: `attribute float aSeed; uniform float uSize; varying float vA;
+        void main(){
+          vA = (1.0 - aSeed) * 0.85;                  // 尾根亮、尾尖淡
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = uSize * (0.5 + aSeed * 1.6) * (140.0 / max(-mv.z, 1.0));
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `uniform vec3 uCol; uniform float uOp; varying float vA;
+        void main(){
+          vec2 q = gl_PointCoord - 0.5;
+          float a = smoothstep(0.5, 0.06, length(q)) * vA * uOp;
+          gl_FragColor = vec4(uCol, a);
+        }`,
+    });
+    const pts = new THREE.Points(geo, mat);
+    g.add(pts);
+    return mat;
+  };
+  cometTailMat = mkTail(900, 0.5, 26, 0x59b7ff, 0.0);    // 離子尾: 直、藍
+  cometDustMat = mkTail(700, 1.6, 18, 0xd8c9a0, 6.0);    // 塵尾: 彎、黃白
+  scene.add(g);
+  COMET.group = g;
+}
+buildComet();
+
+// 彗星軌道位置: 真實克卜勒求解 (高 e 時迭代收斂仍穩)
+const _cSun = new THREE.Vector3(), _cVel = new THREE.Vector3(), _cTail = new THREE.Vector3();
+const _drQ2 = new THREE.Quaternion();
+function cometStep(){
+  const M = COMET.M0 + TWO_PI * simTime / COMET.periodYr;
+  const E = solveKepler(M, COMET.e);
+  const aD = distScale(COMET.a);
+  const xv = aD * (Math.cos(E) - COMET.e);
+  const yv = aD * Math.sqrt(1 - COMET.e * COMET.e) * Math.sin(E);
+  // 傾斜軌道面
+  COMET.pos.set(xv, yv * Math.sin(COMET.incl), yv * Math.cos(COMET.incl));
+  COMET.group.position.copy(COMET.pos);
+  // 尾向: 離子尾精確背日; 塵尾落後軌跡切線
+  _cSun.copy(COMET.pos).normalize();                 // 背日方向
+  // 場景距離 → AU: distScale(a)=a^0.65×DIST_K 的反函數。
+  // 不可直接用場景單位比門檻 (近日點場景距離約 46, 遠大於 AU 尺度的 3.2,
+  // 會使昇華活動度恒為 0 → 尾永遠不出現; 回歸測試抓到)。
+  const rAU = Math.pow(COMET.pos.length() / DIST_K, 1 / 0.65);
+  const act = Math.max(0, Math.min(1, (3.2 - rAU) / 2.2));   // 近日點才有尾 (昇華驅動)
+  cometTailMat.uniforms.uOp.value = act;
+  cometDustMat.uniforms.uOp.value = act * 0.8;
+  COMET.coma.material.opacity = 0.25 + act * 0.5;
+  // 離子尾朝向背日 (群組 -Z 對齊背日方向)
+  _cTail.copy(_cSun);
+  COMET.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), _cTail);
+  // 塵尾: 在背日基礎上向軌跡切線偏轉 (落後)。塵尾是群組的子節點,
+  // 其四元數是【局部】座標, 必須先把世界方向換算進群組框架。
+  _cVel.set(-Math.sin(E), Math.cos(E) * Math.sqrt(1 - COMET.e * COMET.e), 0).normalize();
+  const dustDir = _cTail.clone().multiplyScalar(0.72).addScaledVector(_cVel, 0.55).normalize();
+  _drQ.setFromUnitVectors(new THREE.Vector3(0, 0, -1), dustDir);
+  _drQ2.copy(COMET.group.quaternion).invert().multiply(_drQ);
+  COMET.group.children[3].quaternion.copy(_drQ2);   // children[3] = 塵尾 (0核 1彗髮 2離子 3塵)
+}
 
 // 引力透鏡 後處理著色器 (螢幕空間近似)
 const LensingShader = {
@@ -1285,6 +1633,7 @@ addEventListener('keydown', e => {
     case 'g': case 'G': e.preventDefault(); $('tLens').click(); break;
     case 'd': case 'D': e.preventDefault(); $('tDyson').click(); break;
     case 'w': case 'W': e.preventDefault(); $('tWH').click(); break;
+    case 'c': case 'C': e.preventDefault(); focusOn(-5); break;   // 彗星
   }
 });
 
@@ -1417,6 +1766,7 @@ function getFocusPos(idx, out){
   if (idx === -2) out.set(0, 0, 0);                 // 太陽 (黃道群組原點)
   else if (idx === -3) out.copy(BH.pos);            // 黑洞
   else if (idx === -4) out.copy(WH.pos);            // 蟲洞
+  else if (idx === -5) out.copy(COMET.pos);         // 彗星
   else planetObjs[idx].obj.getWorldPosition(out);   // 行星
   return out;
 }
@@ -1429,12 +1779,14 @@ let hasTrack = false;
 function focusEffR(idx){
   if (idx === -2) return SUN_R * 1.5;              // 太陽
   if (idx === -4) return WH.throatR * 2.2;         // 蟲洞: 含喉緣餘裕
+  if (idx === -5) return 6;                        // 彗星: 含彗髮餘裕
   const p = PLANETS[idx];
   return p.rDisp * (p.ring ? 2.9 : 1.4);           // 土星含環餘裕 (環外緣 2.4×rDisp)
 }
 function focusDistFor(idx){
   if (idx === -3) return BH.diskOuter * 0.9 + 30;  // 黑洞: 停在吸積盤外側
   if (idx === -4) return WH.throatR * 4.5;         // 蟲洞: 停在喉外, 透鏡效應最清楚
+  if (idx === -5) return 26;                       // 彗星: 停在尾長可覽的距離
   return focusEffR(idx) * FOCUS_K;
 }
 function focusOn(idx){
@@ -2098,6 +2450,12 @@ function updatePlanet(o, dt){
     p._moonPhase = (p._moonPhase || 0) + dt * wm;
     p._moonPivot.rotation.y = p._moonPhase;
   }
+  // 伽利略/土星衛星: 真實週期比 ⇒ 拉普拉斯共振 (4:2:1) 自動成立。
+  // 衛星在 pivot 框架內不自轉 ⇒ 潮汐鎖定 (同一面永遠朝向宿主)。
+  if (o.moons) for (const mo of o.moons){
+    mo.pivot.rotation.y = mo.M0 + TWO_PI * simTime / mo.periodYr;
+    if (mo.plumeMat) mo.plumeMat.uniforms.uTime.value = simTime;   // 噴羽動畫走 simTime
+  }
 }
 
 let lensSmooth = 2.5;          // 透鏡強度包絡 (L12: 開關時淡入淡出而非瞬變)
@@ -2122,6 +2480,7 @@ function animate(){
   for (const o of planetObjs) updatePlanet(o, simDt);
   stepFades();
   dsStep(simDt);
+  cometStep();
 
   // 太陽 / 星空 / 吸積盤 動畫
   sunUniforms.uTime.value = simTime;
@@ -2271,6 +2630,7 @@ function renderDynamicUI(){
   for (const o of planetObjs) if (o.labelEl) o.labelEl.textContent = pname(o.data.name);
   if (BH.label && BH.label.element) BH.label.element.textContent = t('label.bh');
   if (WH.label && WH.label.element) WH.label.element.textContent = t('label.wh');
+  if (COMET.label && COMET.label.element) COMET.label.element.textContent = t('label.comet');
   // 2. 鏡頭追蹤選單: 只改 text, value (索引) 不動 → 選中項不會被刷掉
   for (const f of focusOptions) f.opt.textContent = pname(f.name);
   // 3. 目前狀態相關的即時文字
@@ -2295,6 +2655,7 @@ async function hideLoader(){
     if (p._upg) jobs.push(p._upg);
     if (p._ringUpg) jobs.push(p._ringUpg);
     if (p._moonUpg) jobs.push(p._moonUpg);
+    if (p._moons) for (const mo of p._moons) jobs.push(mo.upg);
   }
   try { await Promise.all(jobs); } catch (e){ /* 單檔失敗已在 loadTex 內處理 */ }
   if (window.__universeError) return; // 錯誤覆蓋層優先, 不得被淡出蓋掉

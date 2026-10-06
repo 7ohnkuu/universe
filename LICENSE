@@ -67,3 +67,27 @@ Planetary textures (CC BY 4.0)
                                      from the original project layout)
   The 8k_* files are not committed to this repository (about 68 MB); run
   scripts/fetch-textures.sh to download and verify them.
+
+Moon textures (US public domain)
+  Directory: textures/
+  Source: NASA/JPL-Caltech / NASA Images Library (images-assets.nasa.gov)
+  Status: works of the United States government, not subject to copyright
+          (17 U.S.C. § 105); public domain. No attribution is legally required,
+          but credit is given here and in README.md as a matter of practice.
+  Files and NASA Photojournal / Images Library identifiers:
+    textures/ganymede.jpg   <- PIA03781 "Global Map of Ganymede"
+            true equirectangular global map; downscaled to 2048 px wide,
+            polar rows relaxed at load time (see main.js smoothPoles)
+    textures/titan.jpg      <- PIA19658 "Map of Saturn's Moon Titan - June 2015"
+            true equirectangular radar map; title bar and coordinate axes
+            cropped, downscaled to 2048 px wide
+    textures/io.jpg         <- PIA00292 "Three Views of Io" (centre disc cropped)
+    textures/europa.jpg     <- PIA00016 "Europa - Full Disk"
+    textures/callisto.jpg   <- PIA00457 "Callisto False Color"
+    textures/enceladus.jpg  <- PIA17202 (Cassini full-disc mosaic)
+  The last four are orthographic full-disc mosaics, not equirectangular maps.
+  They are converted at load time by an inverse orthographic projection
+  (trimmed Kasa circle fit on the illuminated limb; far hemisphere folded,
+  night-side samples mirrored so lighting is not baked into albedo). This is
+  an approximation and is documented as such in README.md and in main.js.
+  Downscaling was performed with `sips`; no other modification was made.

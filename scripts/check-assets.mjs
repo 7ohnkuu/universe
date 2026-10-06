@@ -19,7 +19,10 @@ const read = rel => readFileSync(new URL(rel, root), 'utf8');
 // --- 從 main.js 實際解析, 不複製資料表 (資料表改了這裡自動跟著變) ---------
 const main = read('main.js');
 
-const planetNames = [...main.matchAll(/name:\s*'([^']+)'/g)].map(m => m[1]);
+// 只解析 PLANETS 區塊 (MOONS 表也有 name 欄位, 全域正則會誤抓)
+const planetsBlock = main.match(/const PLANETS = \[([\s\S]*?)\n\];/);
+if (!planetsBlock){ console.error('FAIL: 找不到 main.js 的 PLANETS 表'); process.exit(1); }
+const planetNames = [...planetsBlock[1].matchAll(/name:\s*'([^']+)'/g)].map(m => m[1]);
 if (planetNames.length !== 8) {
   console.error(`FAIL: 從 main.js 解析到 ${planetNames.length} 顆行星, 預期 8 — 請同步更新本腳本`);
   process.exit(1);
@@ -40,6 +43,11 @@ const fake8k = [...main.matchAll(/const fake8k = \(base === '(\w+)' \|\| base ==
   .flatMap(m => [m[1], m[2]]);
 
 const earthOnly2k = ['earth_normal.jpg', 'earth_specular.jpg'];  // main.js: 僅 2k
+
+// 衛星貼圖: 解析 main.js 的 MOONS 表 (map 欄位), 不在此重複維護清單
+const moonsBlock = main.match(/const MOONS = \[([\s\S]*?)\n\];/);
+if (!moonsBlock){ console.error('FAIL: 找不到 main.js 的 MOONS 表'); process.exit(1); }
+const moonMaps = [...moonsBlock[1].matchAll(/map:\s*'([^']+)'/g)].map(m => m[1]);
 
 // --- 依解析度組出會被引用的檔案 -------------------------------------------
 const prefix = q => q === '8k' ? '8k_' : q === '4k' ? '4k_' : '';
@@ -62,6 +70,8 @@ for (const q of Object.keys(wanted)) {
   // 環 / 衛星
   wanted[q].add(`${pre}saturn_ring_alpha.png`);
   wanted[q].add(`${pre}moon.jpg`);
+  // 伽利略/土星衛星: 單解析度 (無前綴), 來源 NASA/JPL 公有領域
+  for (const m of moonMaps) wanted[q].add(`${m}.jpg`);
 }
 
 let bad = 0;
