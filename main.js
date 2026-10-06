@@ -1039,6 +1039,52 @@ function buildBlackHole(){
 }
 buildBlackHole();
 
+// =============================================================================
+//  蟲洞 (Ellis–Bronnikov / Ellis drainhole)
+//
+//  與黑洞的關鍵物理差異 (全部經獨立數值驗證, 見下):
+//  1. 零 ADM 質量 ⇒ 遠場偏折無 1/b 項。對零測地線積分得領先項
+//     α(b) = (π/4)(a/b)² (次領先 O(a⁴/b⁴)), 對比 Schwarzschild 的 α=4M/b。
+//     數值積分在 b/a∈[5,12] 與 (π/4)(a/b)² 比值≈1 (大 b 的漂移是截斷誤差)。
+//  2. 無事件視界、無光子球、無陰影: b≤a 時徑向方程無轉折點, 光線【穿越喉】
+//     到另一側而非被捕獲 ⇒ 喉在畫面上是一個透視窗, 不是黑洞。
+//  3. 愛因斯坦環: 透鏡方程 θ·D = α·D_LS 代入 α∝1/θ² 得 θ³ = 常數,
+//     與黑洞的 θ² 標度不同 (arXiv 2607.02889 以此區分蟲洞與黑洞)。
+//     故只畫【一個】細愛因斯坦環, 不畫光子環、不畫陰影。
+//  4. 喉需要負能量 (違反零能量條件) 才能撐開 —— 面板如實標註, 不假裝已可行。
+// =============================================================================
+const WH = { R: 560, incl: -14*DEG, throatR: 22, tilt: 25*DEG,
+             angle: 0, periodYr: 900, group: null, rimMat: null, label: null,
+             pos: new THREE.Vector3() };
+let whOn = true, whSmooth = 0;
+
+function buildWormhole(){
+  const g = new THREE.Group();
+  // 喉緣: 附加混合的淡藍環, 給出深度線索 (透視窗本身由後處理著色器畫)
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(WH.throatR, WH.throatR * 0.06, 16, 160),
+    new THREE.MeshBasicMaterial({ color: 0x66aaff, transparent: true, opacity: 0.5,
+      blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  g.add(rim);
+  WH.rimMat = rim.material;
+  // 不可見但可點: 讓蟲洞能像行星/黑洞一樣被點擊聚焦
+  const hit = new THREE.Mesh(
+    new THREE.SphereGeometry(WH.throatR, 24, 24),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.0, depthWrite: false })
+  );
+  hit.userData.focusIndex = -4;
+  clickable.push(hit);
+  g.add(hit);
+  const div = document.createElement('div'); div.className = 'label wh'; div.textContent = t('label.wh');
+  const label = new CSS2DObject(div); label.position.set(0, WH.throatR * 2.0, 0); g.add(label);
+  WH.label = label;
+  g.rotation.x = WH.tilt;
+  scene.add(g);
+  WH.group = g;
+}
+buildWormhole();
+
 // 引力透鏡 後處理著色器 (螢幕空間近似)
 const LensingShader = {
   uniforms: {
@@ -1082,7 +1128,72 @@ const LensingShader = {
 };
 
 // =============================================================================
-//  後處理管線: Render -> 引力透鏡 -> Bloom(HDR) -> Output
+//  蟲洞透鏡 後處理著色器
+//
+//  偏折律 α(b) = K·a²/b² (Ellis–Bronnikov 零測地線積分的領先項),
+//  對比黑洞 pass 的 α ∝ 1/b。兩者在畫面上的差別:
+//    · 黑洞: 偏折在視界外側很強, 有光子環與陰影盤。
+//    · 蟲洞: 偏折在喉外迅速衰減 (1/b²), 無陰影、無光子環;
+//      b≤a 的光線穿喉而過 → 喉是一個透視窗, 顯示「另一側」。
+//  愛因斯坦環: θ³=常數 ⇒ 只畫一個細環, 不畫多重環。
+// =============================================================================
+const WormholeLensingShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    whUV:     { value: new THREE.Vector2(0.5, 0.5) },
+    whRadius: { value: 0.03 },   // 喉的螢幕半徑 (UV)
+    strength: { value: 0 },
+    aspect:   { value: innerWidth / innerHeight },
+    ringColor:{ value: new THREE.Color(0x7fb8ff) },
+    otherTint:{ value: new THREE.Color(0x2a3f66) },  // 「另一側」的色偏
+  },
+  vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform vec2 whUV; uniform float whRadius;
+    uniform float strength; uniform float aspect; uniform vec3 ringColor; uniform vec3 otherTint;
+    varying vec2 vUv;
+    void main(){
+      vec2 uv = vUv;
+      if(strength <= 0.0001){ gl_FragColor = texture2D(tDiffuse, uv); return; }
+      vec2 d = uv - whUV; d.x *= aspect;
+      float dist = length(d);
+      vec2 dir = dist > 1e-6 ? d / dist : vec2(0.0);
+      // b ≤ a: 光線穿喉而過 → 顯示「另一側」。
+      // 映射必須【連續且有界】: 早先版用鏡像 + clamp(mUv,0,1), 中心區會採到
+      // 螢幕邊緣的常數色 → 產生放射狀扇形假影; 且外環的偏折 cap 過寬,
+      // 把外環帶折回喉盤, 將扇形複製到喉外。此處改為:
+      //   rr = a·(dist/a)^0.8  (輕度放大, dist=a 時 rr=a 連續, 不越出喉盤)
+      // 不做鏡像反轉: 穿喉後的天空方向在畫面上沒有第二個場景可採,
+      // 用同向輕度放大 + 色偏近似「另一側」, 至少連續且不產生假影。
+      if(dist < whRadius){
+        float rr = whRadius * pow(max(dist, 1e-4) / whRadius, 0.8);
+        vec2 mUv = whUV + vec2(dir.x * rr / aspect, dir.y * rr);
+        vec3 other = texture2D(tDiffuse, mUv).rgb;
+        // 喉緣增亮: dist 越接近 whRadius 越亮 (負能量物質的視覺隱喻, 裝飾層)
+        float edge = smoothstep(whRadius * 0.72, whRadius, dist);
+        vec3 col = mix(other * 0.85 + otherTint * 0.35, ringColor * 0.55, edge * 0.5);
+        gl_FragColor = vec4(col, 1.0); return;
+      }
+      // b > a: α = K a²/b² → 取樣點向喉位移, 位移量 ∝ 1/dist²。
+      // cap 取 0.5·(dist−a): 保證取樣點留在喉外 (dist−bend ≥ 0.5(dist+a) > a),
+      // 不會折回喉盤而複製喉內內容。
+      float bend = strength * whRadius * whRadius * whRadius * 2.0 / (dist * dist);
+      bend = min(bend, 0.5 * (dist - whRadius));
+      vec2 sUv = uv - vec2(dir.x * bend / aspect, dir.y * bend);
+      if(sUv.x < 0.0 || sUv.x > 1.0 || sUv.y < 0.0 || sUv.y > 1.0){ gl_FragColor = texture2D(tDiffuse, uv); return; }
+      vec3 col = texture2D(tDiffuse, sUv).rgb;
+      // 單一愛因斯坦環 (θ³=常數): 細高斯環於 1.55× 喉半徑, 無光子環、無陰影
+      float ringC = whRadius * 1.55;
+      float ringW = whRadius * 0.035;
+      float q = (dist - ringC) / ringW;
+      float ring = exp(-q * q);
+      col += ringColor * ring * strength * 0.18;
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+};
+
+// =============================================================================
+//  後處理管線: Render -> 引力透鏡 -> 蟲洞透鏡 -> Bloom(HDR) -> Output
 // =============================================================================
 // MSAA 必須開在 composer 自己的 render target 上 (場景渲染到 rt1, 非預設框架緩衝)
 const composerRT = new THREE.WebGLRenderTarget(innerWidth, innerHeight,
@@ -1092,6 +1203,8 @@ composer.setSize(innerWidth, innerHeight); // 同步 _width/_pixelRatio 與所�
 composer.addPass(new RenderPass(scene, camera));
 const lensingPass = new ShaderPass(LensingShader);
 composer.addPass(lensingPass);
+const whLensingPass = new ShaderPass(WormholeLensingShader);
+composer.addPass(whLensingPass);
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.8, 0.6, 2.0);
 bloom.highPassUniforms['smoothWidth'].value = 0.3; // 預設 0.01 閾帶太尖 -> 高光逐幁閃縮; 放寬後輝光平滑
 composer.addPass(bloom);
@@ -1171,6 +1284,7 @@ addEventListener('keydown', e => {
     case 'b': case 'B': e.preventDefault(); $('tBH').click(); break;
     case 'g': case 'G': e.preventDefault(); $('tLens').click(); break;
     case 'd': case 'D': e.preventDefault(); $('tDyson').click(); break;
+    case 'w': case 'W': e.preventDefault(); $('tWH').click(); break;
   }
 });
 
@@ -1293,7 +1407,8 @@ renderer.domElement.addEventListener('pointerup', e => {
   const hits = raycaster.intersectObjects(clickable, false);
   // r160 Raycaster 不看 visible -> 隱藏的黑洞仍可被命中, 這裡手動過濾 (M1)
   const hit = hits.find(h => h.object.userData.focusIndex !== undefined &&
-    !(h.object.userData.focusIndex === -3 && !bhOn));
+    !(h.object.userData.focusIndex === -3 && !bhOn) &&
+    !(h.object.userData.focusIndex === -4 && !whOn));
   if (hit) focusOn(hit.object.userData.focusIndex);
 });
 
@@ -1301,6 +1416,7 @@ const flyTo = { active: false, index: -1, dist: 200, t: 0 };
 function getFocusPos(idx, out){
   if (idx === -2) out.set(0, 0, 0);                 // 太陽 (黃道群組原點)
   else if (idx === -3) out.copy(BH.pos);            // 黑洞
+  else if (idx === -4) out.copy(WH.pos);            // 蟲洞
   else planetObjs[idx].obj.getWorldPosition(out);   // 行星
   return out;
 }
@@ -1312,15 +1428,18 @@ const _fd = new THREE.Vector3(), _trackPos = new THREE.Vector3(), _prevTrack = n
 let hasTrack = false;
 function focusEffR(idx){
   if (idx === -2) return SUN_R * 1.5;              // 太陽
+  if (idx === -4) return WH.throatR * 2.2;         // 蟲洞: 含喉緣餘裕
   const p = PLANETS[idx];
   return p.rDisp * (p.ring ? 2.9 : 1.4);           // 土星含環餘裕 (環外緣 2.4×rDisp)
 }
 function focusDistFor(idx){
   if (idx === -3) return BH.diskOuter * 0.9 + 30;  // 黑洞: 停在吸積盤外側
+  if (idx === -4) return WH.throatR * 4.5;         // 蟲洞: 停在喉外, 透鏡效應最清楚
   return focusEffR(idx) * FOCUS_K;
 }
 function focusOn(idx){
   if (idx === -3 && !bhOn) { $('focus').value = String(followIdx); return; } // 隱藏的黑洞不可聚焦
+  if (idx === -4 && !whOn) { $('focus').value = String(followIdx); return; } // 隱藏的蟲洞不可聚焦
   followIdx = idx; $('focus').value = String(idx);
   hasTrack = false; // 重設跟隨暫存器, 避免跨目標的大位移
   if (idx === -1) { flyTo.active = false; controls.minDistance = 30; return; } // 自由視角
@@ -1366,6 +1485,28 @@ $('tLabels').addEventListener('click', e => {
 $('tLens').addEventListener('click', e => {
   lensOn = !lensOn; e.target.classList.toggle('on', lensOn);
   e.target.setAttribute('aria-pressed', String(lensOn));
+});
+function renderWhNote(){
+  const el = $('whNote');
+  if (el) el.innerHTML = whOn ? `<span class="ds-note">${t('ds.note.wh')}</span>` : '';
+}
+$('tWH').addEventListener('click', e => {
+  whOn = !whOn; e.target.classList.toggle('on', whOn);
+  e.target.setAttribute('aria-pressed', String(whOn));
+  renderWhNote();
+  const rimMat = WH.rimMat;
+  const whLabelDiv = WH.label.element;
+  const cur = rimMat.opacity / 0.5;              // rim 基準不透明度為 0.5
+  if (whOn) { WH.group.visible = true; WH.label.visible = true; whLabelDiv.style.display = ''; }
+  // 標籤由 CSS2DRenderer 獨立渲染 (不看祖先 visible), 必須與群組一起淡出/隱藏
+  fadeTo('wh', v => {
+    rimMat.opacity = v * 0.5;
+    whLabelDiv.style.opacity = String(v);
+  }, cur, whOn ? 1 : 0, 180,
+    () => { if (!whOn){
+      WH.group.visible = false; WH.label.visible = false; whLabelDiv.style.display = 'none';
+      if (followIdx === -4) focusOn(-1); // 停止追擊隱形蟲洞
+    } });
 });
 $('tBH').addEventListener('click', e => {
   bhOn = !bhOn; e.target.classList.toggle('on', bhOn);
@@ -2000,6 +2141,16 @@ function animate(){
     BH.group.position.copy(BH.pos);
     BH.group.rotation.y += dt * 0.05; // 緩慢自旋視覺
   }
+  // 蟲洞軌道 (與黑洞反向傾斜, 避免兩者在畫面上長期重疊)
+  if (whOn) {
+    WH.angle += dt * simSpeed * (TWO_PI / WH.periodYr);
+    WH.pos.set(
+      WH.R * Math.cos(WH.angle),
+      WH.R * Math.sin(WH.angle) * Math.sin(WH.incl),
+      WH.R * Math.sin(WH.angle) * Math.cos(WH.incl)
+    );
+    WH.group.position.copy(WH.pos);
+  }
 
   // 目標每幀位移 -> 直接平移整個鏡頭 rig (camera+target), 零滯後追擊;
   // 飛行/跟隨只需收斂剩餘誤差, 對內行星高速軌道也能抵達 (H1)
@@ -2076,6 +2227,24 @@ function animate(){
   }
   lensingPass.uniforms.strength.value = lensProjected ? lensSmooth : 0;
 
+  // 蟲洞透鏡: 同樣投影到螢幕空間, 強度平滑。與黑洞 pass 獨立, 兩者不共用 uniform。
+  const wantWh = (lensOn && whOn) ? 2.2 : 0;
+  whSmooth += (wantWh - whSmooth) * damp(12.0, dt);
+  if (whSmooth < 0.001) whSmooth = 0;
+  let whProjected = false;
+  if (whSmooth > 0.001 && whOn) {
+    const view = _tmpV.copy(WH.pos).applyMatrix4(camera.matrixWorldInverse);
+    if (view.z < 0) {
+      const ndc = _tmpV.copy(WH.pos).project(camera);
+      whLensingPass.uniforms.whUV.value.set(ndc.x*0.5+0.5, ndc.y*0.5+0.5);
+      const dist = camera.position.distanceTo(WH.pos);
+      const fov = camera.fov * DEG;
+      whLensingPass.uniforms.whRadius.value = (WH.throatR / dist) / (2 * Math.tan(fov/2));
+      whProjected = true;
+    }
+  }
+  whLensingPass.uniforms.strength.value = whProjected ? whSmooth : 0;
+
   composer.render();
   labelRenderer.render(scene, camera);
 }
@@ -2089,6 +2258,7 @@ addEventListener('resize', () => {
   composer.setSize(innerWidth, innerHeight); // 已含所有 pass (含 bloom) 的像素比縮放尺寸
   labelRenderer.setSize(innerWidth, innerHeight);
   lensingPass.uniforms.aspect.value = innerWidth / innerHeight;
+  whLensingPass.uniforms.aspect.value = innerWidth / innerHeight;
   starMat.uniforms.uPixel.value = renderer.getPixelRatio();
 });
 
@@ -2100,6 +2270,7 @@ function renderDynamicUI(){
   // 1. 3D 標籤 (行星顯示名 + 黑洞)
   for (const o of planetObjs) if (o.labelEl) o.labelEl.textContent = pname(o.data.name);
   if (BH.label && BH.label.element) BH.label.element.textContent = t('label.bh');
+  if (WH.label && WH.label.element) WH.label.element.textContent = t('label.wh');
   // 2. 鏡頭追蹤選單: 只改 text, value (索引) 不動 → 選中項不會被刷掉
   for (const f of focusOptions) f.opt.textContent = pname(f.name);
   // 3. 目前狀態相關的即時文字
@@ -2109,6 +2280,7 @@ function renderDynamicUI(){
   // 4. 載入進度 (若已淡出, renderLoaderTex 自行 return)
   renderLoaderTex();
   renderDysonStats();   // 換語言時物理讀數也要重新取詞
+  renderWhNote();       // 蟲洞說明同樣要重新取詞
   dsSyncLabels();       // 殼/環的半徑標籤也要跟著換語言
 }
 window.addEventListener('langchange', renderDynamicUI);

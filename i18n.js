@@ -47,6 +47,10 @@
       'btn.labels': '名稱',
       'btn.lens': '引力透鏡',
       'btn.bh': '黑洞',
+      'btn.wh': '蟲洞',
+      'opt.wh': '蟲洞',
+      'label.wh': '蟲洞 (Ellis–Bronnikov)',
+      'ds.note.wh': '★ 蟲洞無事件視界、無光子球、無陰影: b≤a 的光線穿喉而過, 喉是一個透視窗。偏折 α=(π/4)(a/b)² 無 1/b 項 ⇒ 零 ADM 質量; 愛因斯坦環 θ³=常數, 與黑洞的 θ² 不同 (arXiv 2607.02889)。撐開喉需要負能量 (違反零能量條件), 目前僅為理論構想。',
 
       'grp.dyson': '戴森結構',
       'btn.dyson': '啟用結構',
@@ -78,7 +82,7 @@
       'loader.tex': '載入中 · 貼圖 {done}/{total}',
       'loader.texBytes': '載入中 · 貼圖 {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': '載入進度',
-      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼',
+      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼 · W 蟲洞',
 
       'label.bh': '黑洞 (引力透鏡)',
       'opt.bh': '黑洞',
@@ -131,6 +135,10 @@
       'btn.labels': 'Labels',
       'btn.lens': 'Lensing',
       'btn.bh': 'Black hole',
+      'btn.wh': 'Wormhole',
+      'opt.wh': 'Wormhole',
+      'label.wh': 'Wormhole (Ellis–Bronnikov)',
+      'ds.note.wh': '★ No event horizon, no photon sphere, no shadow: rays with b≤a pass through the throat, so the throat is a window, not a black disc. Deflection α=(π/4)(a/b)² has no 1/b term ⇒ zero ADM mass; the Einstein ring scales as θ³=const, unlike the black hole’s θ² (arXiv 2607.02889). Keeping the throat open needs negative energy (violates the null energy condition) — a theoretical construct only.',
 
       'grp.dyson': 'DYSON STRUCTURE',
       'btn.dyson': 'Enable structure',
@@ -163,7 +171,7 @@
       'loader.tex': 'Loading · textures {done}/{total}',
       'loader.texBytes': 'Loading · textures {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': 'Loading progress',
-      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell',
+      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell · W wormhole',
 
       'label.bh': 'Black hole (lensing)',
       'opt.bh': 'Black hole',

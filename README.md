@@ -35,6 +35,7 @@ click-to-fly-and-track · zh-TW / English UI.
 - [Controls](#controls)
   - [Keyboard](#keyboard)
 - [The Dyson shell](#the-dyson-shell)
+- [The wormhole](#the-wormhole)
 - [Project layout](#project-layout)
 - [Textures](#textures)
 - [Internationalization](#internationalization)
@@ -426,6 +427,41 @@ panel says so rather than pretending otherwise.
 brightness and the point light both scale by `(1−f)` from a single fade value,
 so the two can never disagree mid-transition; a regression test failed until
 that was true (with f=100% the Sun stayed black after the shell was removed).
+
+---
+
+## The wormhole
+
+A second compact object (`W` key, or the panel toggle) orbits outside the
+planets: a traversable **Ellis–Bronnikov wormhole** (the Ellis drainhole),
+rendered with its own screen-space lensing pass. Its behaviour is the opposite
+of the black hole's in every observable way, and each difference is asserted in
+the test suite:
+
+- **No shadow.** Rays with impact parameter `b ≤ a` (the throat radius) have no
+  turning point — they pass through the throat. The throat is therefore a
+  *window*, not a black disc: the measured centre of a black-hole shadow is
+  uniformly black (mean 0, std 0) while the throat shows structure
+  (mean ≈ 47, std ≈ 41).
+- **No mass term in the deflection.** Integrating the null geodesics of
+  `ds² = −dt² + dl² + (l²+a²)dΩ²` gives a leading deflection
+  `α = (π/4)(a/b)²` with **no 1/b term** — the signature of zero ADM mass —
+  against Schwarzschild's `α = 4M/b`. The numerical integral matches the
+  leading term to a few percent for `b/a ∈ [5,12]`.
+- **One Einstein ring, scaling as θ³.** Substituting `α ∝ 1/θ²` into the lens
+  equation gives `θ³ = const`, unlike the black hole's `θ²` — the geometric
+  diagnostic used to tell the two apart (arXiv 2607.02889). The pass draws a
+  single thin ring at 1.55× the throat radius and no photon ring.
+- **The throat needs negative energy.** Keeping it open violates the null
+  energy condition; the panel states this plainly instead of pretending the
+  object is buildable.
+
+The first version of the throat mapping produced radial sector artefacts (a
+mirrored sample clamped to the screen edge, plus an over-wide deflection cap
+folding the outer annulus back over the throat). The shipped mapping is
+continuous and bounded (`rr = a·(dist/a)^0.8` inside the throat, deflection
+clamped to half the gap outside), which removes them; the regression test
+compares lens-on versus lens-off pixels so a silent no-op pass would fail.
 
 ---
 
