@@ -293,10 +293,11 @@ camera mid-flight cancels the approach instead of fighting you for control.
 
 ## The Dyson shell
 
-A toggle in the panel (and the `D` key) wraps the Sun in a rigid shell with
-adjustable **coverage** (0–100%) and **radius** (0.15–0.35 AU). The panel shows
-the live physics: shell temperature, peak wavelength, intercepted power,
-optical-band fraction and escaping luminosity.
+A toggle in the panel (and the `D` key) wraps the Sun in a structure with
+adjustable **coverage** (0–100%) and **radius** (0.15–0.35 AU), in one of two
+forms selected from a dropdown: a closed **shell** or an orbital **ring**.
+The panel shows the live physics for whichever is active: temperature, peak
+wavelength, intercepted power, optical-band fraction and escaping luminosity.
 
 Nothing here is eyeballed. Every number comes from a formula that was verified
 numerically before being shipped, and the browser implementation is
@@ -330,6 +331,39 @@ gain is kept below linear 1.0 so the ACES tone mapper cannot desaturate 777 K
 into something that reads as 3500 K — measured hue error ≤ 6.5° across the
 radius range.
 
+### The ring: a different physics, and a different stability
+
+The ring is a band of `h = 0.08·R` made of 120 independent collectors, each on
+its own circular Keplerian orbit (`ω = 2π/a^1.5`). Three consequences follow,
+all asserted in the test suite:
+
+- **Cooler.** A flat collector radiates from both faces with no self-
+  reabsorption, so `S(1−A) = 2σT⁴` instead of `σT⁴`: the ring runs at
+  `T_shell / 2^(1/4)` — 654 K where the shell would be 777 K.
+- **Radius-independent interception.** Because `h ∝ R`, the blocked fraction
+  `f·h/2` cancels the radius entirely: at 100% coverage the ring hides only
+  4% of the starlight and intercepts 3.6% of L, versus 100% and 95% for the
+  shell. The panel's escaping-luminosity readout shows the difference.
+- **Stable, but in a different way.** A *rigid* ring around a single star is
+  exponentially unstable (Maxwell's 1856 Adams Prize essay; the stable
+  configurations in arXiv 2502.12806 need a binary). Independent orbiting
+  collectors sidestep that. And where the shell's perturbation response is
+  neutral equilibrium (constant-speed drift until impact), the ring's radial
+  perturbation is a **bounded epicyclic oscillation** at `κ = Ω` — the same
+  button demonstrates two opposite stability regimes, measured as a bounded
+  oscillation (amplitude < 0.2, never drifting away).
+
+### Why it looks like a megastructure
+
+Both forms carry a deliberately artificial surface layer: staggered hexagonal
+panel seams, latitude energy conduits with travelling pulses, a polar hub on
+the shell, and on the ring a bright additive energy conduit plus sun-facing
+absorber plates with cold-lit truss sides. These lights are **structural
+illumination, not thermal emission** — they sit in a separate uniform from the
+blackbody glow, so turning on infrared false colour still shows only the
+physically computed waste heat. The pulse animation runs on simulation time,
+so it freezes when the tab is hidden or the clock is paused.
+
 ### Neutral equilibrium, not a spring
 
 By Newton's shell theorem a uniform shell feels **zero net force** from the
@@ -345,6 +379,9 @@ quantitatively: velocity varies by 0.00% over the drift, displacement versus
 time is a straight line (R² = 0.998), and the shell stops exactly at
 `R − R☉`. A spring-like bounce-back or exponential runaway would both be
 physically wrong here.
+
+The ring behaves the opposite way under the same button — see
+[The ring: a different physics, and a different stability](#the-ring-a-different-physics-and-a-different-stability).
 
 The literature is more pessimistic than the toy: for a relativistic elastic
 membrane the axisymmetric dipole mode is already linearly unstable, so radial

@@ -237,9 +237,16 @@
     </div>
 
     <div class="grp">
-      <div class="grp-t" data-i18n="grp.dyson">戴森殼</div>
+      <div class="grp-t" data-i18n="grp.dyson">戴森結構</div>
+      <div class="row">
+        <label data-i18n="dyson.mode">結構型態</label>
+        <select id="dsMode">
+          <option value="shell" selected data-i18n="dymode.shell">戴森殼 (閉合球殼)</option>
+          <option value="ring" data-i18n="dymode.ring">戴森環 (軌道收集器環)</option>
+        </select>
+      </div>
       <div class="row btns">
-        <button id="tDyson" aria-pressed="false" data-i18n="btn.dyson">戴森殼</button>
+        <button id="tDyson" aria-pressed="false" data-i18n="btn.dyson">啟用結構</button>
         <button id="dsIR" class="ds-off" aria-pressed="false" data-i18n="btn.dsIR">紅外偽色</button>
         <button id="dsPerturb" class="ds-off" data-i18n="btn.dsPerturb">施加擾動</button>
       </div>
@@ -248,8 +255,8 @@
         <input id="dsCover" type="range" min="0" max="1" step="0.01" value="0.5" />
       </div>
       <div class="row ds-ctl ds-off">
-        <label><span data-i18n="dyson.radius">殼半徑</span> <b id="dsRadVal">0.30 AU</b></label>
-        <input id="dsRadius" type="range" min="0.15" max="0.5" step="0.01" value="0.3" />
+        <label><span id="dsRadLabel" data-i18n="dyson.radius">殼半徑</span> <b id="dsRadVal">0.25 AU</b></label>
+        <input id="dsRadius" type="range" min="0.15" max="0.5" step="0.01" value="0.25" />
       </div>
       <div class="ds-stats" id="dsStats"></div>
     </div>

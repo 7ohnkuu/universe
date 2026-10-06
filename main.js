@@ -1459,8 +1459,10 @@ function blackbodyRGB(T){
 
 const dsUniforms = {
   uColor:   { value: new THREE.Color(1, 0.5, 0.1) },
-  uGlow:    { value: 0 },      // 發光強度: 光學模式幾乎為 0, 紅外模式才明顯
-  uOpacity: { value: 0 },      // = 覆蓋率 f
+  uGlow:    { value: 0 },      // 熱輻射強度: 光學模式幾乎為 0, 紅外模式才明顯
+  uOpacity: { value: 0 },      // = 實際遮蔽比例
+  uTime:    { value: 0 },      // 結構照明動畫 (人造光源, 非熱輻射)
+  uLights:  { value: 1 },      // 人造照明強度 (科幻結構層)
 };
 const dsMat = new THREE.ShaderMaterial({
   uniforms: dsUniforms,
@@ -1472,15 +1474,24 @@ const dsMat = new THREE.ShaderMaterial({
   fragmentShader: `
     varying vec2 vUv; varying vec3 vN;
     uniform vec3 uColor; uniform float uGlow; uniform float uOpacity;
+    uniform float uTime; uniform float uLights;
     void main(){
-      // 集能板陣列的接縫紋理: 讓它看起來是人造結構而非一顆平滑行星
-      vec2 cell = vUv * vec2(72.0, 36.0);
+      // 集能板陣列: 六角錯排的接縫, 比方正網格更像人造巨構
+      vec2 cell = vUv * vec2(96.0, 48.0);
+      cell.x += step(0.5, fract(cell.y * 0.5)) * 0.5;   // 錯排
       vec2 g = abs(fract(cell) - 0.5);
-      float seam = smoothstep(0.46, 0.5, max(g.x, g.y));
+      float seam = smoothstep(0.44, 0.5, max(g.x, g.y));
+      // 能量導管: 沿緯度移動的脈衝 (結構自身的輸能照明)
+      float flow = fract(vUv.y * 6.0 - uTime * 0.06);
+      float pulse = smoothstep(0.0, 0.06, flow) * smoothstep(0.16, 0.06, flow);
       // 掠射角增亮, 讓殼的輪廓在近乎全黑的表面上仍可辨識
       float rim = pow(1.0 - abs(vN.z), 3.0);
-      vec3 base = vec3(0.012, 0.014, 0.02) + seam * vec3(0.03, 0.035, 0.05) + rim * vec3(0.05, 0.07, 0.1);
-      vec3 col = base + uColor * uGlow;
+      vec3 steel = vec3(0.012, 0.014, 0.02);
+      vec3 lamp  = vec3(0.35, 0.62, 0.95);          // 人造照明的冷色
+      vec3 base = steel + seam * lamp * 0.10 * uLights
+                        + pulse * lamp * 0.16 * uLights
+                        + rim * vec3(0.05, 0.07, 0.1);
+      vec3 col = base + uColor * uGlow;             // uGlow = 熱輻射 (僅紅外模式)
       gl_FragColor = vec4(col, uOpacity);
     }`,
 });
@@ -1489,70 +1500,238 @@ dsGroup.visible = false;
 ecliptic.add(dsGroup);
 let dsMesh = null, dsR = distScale(DS_DEF_AU);
 
-const ds = { on: false, ir: false, cover: 0.5, radiusAU: DS_DEF_AU,
+// -----------------------------------------------------------------------------
+//  戴森環 (軌道收集器環)
+//
+//  與殼的關鍵物理差異:
+//  1. 溫度: 環是平板收集器, 兩面都向太空輻射且無自身再吸收,
+//     S(1-A) = 2σT⁴ ⇒ T環 = T殼 / 2^(1/4) ≈ T殼 / 1.189。
+//  2. 遮光/攔截與半徑無關: 帶高 h∝R 使 r 相消, cover=1 時僅擋 h/2 = 4% 星光。
+//  3. 動態穩定: 每個收集器獨立走克卜勒軌道 (ω = 2π/a^1.5), 不是剛體。
+//     剛性環對單星是指數不穩定 (Maxwell 1856; arXiv 2502.12806 的穩定解需雙星),
+//     但獨立軌道環沒有這個問題。
+//  4. 擾動響應相反: 殼是中性平衡 (等速漂走); 環在開普勒勢中徑向擾動會以
+//     週轉頻率 κ=Ω 做【有界】振盪 —— 同一個按鈕, 兩種截然不同的穩定性示範。
+// -----------------------------------------------------------------------------
+const DR_H = 0.08;                 // 環帶高 / 半徑 (決定遮光率 h/2)
+const DR_N = 120;                  // 收集器數量
+const drUniforms = {
+  uColor:  { value: new THREE.Color(1, 0.5, 0.1) },
+  uGlow:   { value: 0 },
+  uOpacity:{ value: 0 },
+  uTime:   { value: 0 },
+  uLights: { value: 1 },
+};
+const drMat = new THREE.ShaderMaterial({
+  uniforms: drUniforms,
+  transparent: true,
+  side: THREE.DoubleSide,
+  vertexShader: `varying vec2 vUv; varying vec3 vN;
+    void main(){ vUv = uv; vN = normalize(normalMatrix * normal);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    varying vec2 vUv; varying vec3 vN;
+    uniform vec3 uColor; uniform float uGlow; uniform float uOpacity;
+    uniform float uTime; uniform float uLights;
+    void main(){
+      // 沿環向的結構分段 + 移動的能量脈衝 (輸能照明, 人造光源)
+      float seg = abs(fract(vUv.x * 160.0) - 0.5);
+      float seam = smoothstep(0.42, 0.5, seg);
+      float flow = fract(vUv.x * 8.0 - uTime * 0.10);
+      float pulse = smoothstep(0.0, 0.05, flow) * smoothstep(0.14, 0.05, flow);
+      // 帶的上下邊緣增亮, 給出輪廓
+      float edge = smoothstep(0.5, 0.02, abs(vUv.y - 0.5));
+      // 結構脊: 沿帶中線的桁架亮線, 巨構的辨識特徵
+      float spine = smoothstep(0.06, 0.0, abs(vUv.y - 0.5));
+      vec3 steel = vec3(0.012, 0.014, 0.02);
+      vec3 lamp  = vec3(0.35, 0.62, 0.95);
+      vec3 base = steel * (0.4 + 0.6 * edge)
+                + seam * lamp * 0.30 * uLights
+                + pulse * lamp * 0.55 * uLights
+                + spine * lamp * 0.35 * uLights
+                + edge * vec3(0.05, 0.075, 0.11);
+      vec3 col = base + uColor * uGlow;
+      gl_FragColor = vec4(col, uOpacity);
+    }`,
+});
+// 收集器專用材質: 向陽面是吸光的深色集能板, 背陽與側面是人造照明的冷色桁架。
+// BoxGeometry 的 local -Z 指向恆星 (basis 的第三軸是徑向外), 故以 vN.z 判別向陽面。
+const drColMat = new THREE.ShaderMaterial({
+  uniforms: drUniforms,
+  transparent: true,
+  side: THREE.DoubleSide,
+  vertexShader: `varying vec2 vUv; varying vec3 vN;
+    void main(){ vUv = uv; vN = normalize(normalMatrix * normal);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    varying vec2 vUv; varying vec3 vN;
+    uniform vec3 uColor; uniform float uGlow; uniform float uOpacity;
+    uniform float uTime; uniform float uLights;
+    void main(){
+      float sunward = smoothstep(0.2, -0.2, vN.z);      // local -Z = 向陽
+      vec3 absorber = vec3(0.02, 0.022, 0.03);           // 集能板: 吸光, 幾乎不反射
+      vec3 lamp = vec3(0.35, 0.62, 0.95);
+      // 側面桁架照明 + 沿板長的脈衝
+      float flow = fract(vUv.x * 2.0 - uTime * 0.12);
+      float pulse = smoothstep(0.0, 0.08, flow) * smoothstep(0.2, 0.08, flow);
+      vec3 col = mix(lamp * (0.22 + 0.5 * pulse) * uLights, absorber, sunward);
+      col += uColor * uGlow * (0.3 + 0.7 * sunward);     // 紅外偽色時向陽面更亮
+      gl_FragColor = vec4(col, uOpacity);
+    }`,
+});
+// 能量導管: 沿環中線的附加混合亮環, 輸能的視覺隱喻 (純裝飾, 不參與物理)
+const drConduitMat = new THREE.MeshBasicMaterial({
+  color: 0x59a8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+  depthWrite: false, side: THREE.DoubleSide,
+});
+let drConduit = null;
+const drGroup = new THREE.Group();
+drGroup.visible = false;
+ecliptic.add(drGroup);
+let drBand = null, drCollectors = null;
+const dr = { angle: 0, omega: 0, periodYr: 1, amp: 0, phase: 0, t: 0 };
+const _drM = new THREE.Matrix4(), _drQ = new THREE.Quaternion(),
+      _drP = new THREE.Vector3(), _drS = new THREE.Vector3(), _drZ = new THREE.Vector3(0,0,1);
+
+const ds = { on: false, ir: false, cover: 0.5, radiusAU: DS_DEF_AU, mode: 'shell',
              offset: new THREE.Vector3(), vel: new THREE.Vector3(), collided: false };
 const DS_BASE_LIGHT = sunLight.intensity;   // 未遮蔽時的恆星強度
 
-// 以單一 v ∈ [0,1] 同步驅動「殼不透明度」與「恆星遮蔽」。
+// 遮蔽比例: 殼 = f (閉合殼擋住全部立體角); 環 = f·h/2 (緯度帶只擋 ±h/2)
+const dsBlockFrac = () => ds.mode === 'shell' ? ds.cover : ds.cover * DR_H / 2;
+// 環溫度 = 殼溫度 / 2^(1/4): 平板兩面輻射, 無自身再吸收
+const drShellTemp = R_au => dsShellTemp(R_au) / Math.pow(2, 0.25);
+
+// 以單一 v ∈ [0,1] 同步驅動「結構不透明度」與「恆星遮蔽」。
 // 必須同源: 若兩者不同步, 漸變過程中會瞬間違反能量守恆
 // (例如殼已消失但恆星還暗著)。關閉時 v=0 ⇒ 恆星必定恢復全亮。
 // 這是先前 bug 的根源: dsApply() 不看 ds.on, 導致 f=100% 時關閉殼,
 // 恆星亮度停在 0 而永久全黑。
+// 遮蔽比例依模式: 殼 = f; 環 = f·h/2 (緯度帶只擋 ±h/2)。
 function dsSetFade(v){
-  const coverEff = ds.cover * v;            // 實際遮蔽比例 (漸變中 < f)
-  dsUniforms.uOpacity.value = coverEff;
-  sunLight.intensity = DS_BASE_LIGHT * (1 - coverEff);
-  sunUniforms.uVis.value = 1 - coverEff;
-  glow.material.opacity = 1 - coverEff;
-  glow.visible = coverEff < 0.999;
+  const blk = dsBlockFrac() * v;
+  dsUniforms.uOpacity.value = ds.mode === 'shell' ? ds.cover * v : 0;
+  drUniforms.uOpacity.value = ds.mode === 'ring'  ? ds.cover * v : 0;
+  drConduitMat.opacity = ds.mode === 'ring' ? ds.cover * v * 0.45 : 0;   // 導管亮度隨覆蓋率
+  sunLight.intensity = DS_BASE_LIGHT * (1 - blk);
+  sunUniforms.uVis.value = 1 - blk;
+  glow.material.opacity = 1 - blk;
+  glow.visible = blk < 0.999;
+}
+
+// 環的幾何: 一條開放緯度帶 + DR_N 個獨立收集器。
+// 收集器不連成剛體 —— 每個都走自己的圓軌道, 整環同角速度旋轉只是
+// 「同半徑圓軌道」的等價描述, 所以 drGroup 整體旋轉在物理上是精確的。
+function drLayout(){
+  if (!drCollectors) return;
+  const r = distScale(ds.radiusAU);
+  const w = (TWO_PI * r / DR_N) * 0.92 * Math.max(ds.cover, 0.02);
+  const t = new THREE.Vector3(), out = new THREE.Vector3(0, 0, 1), rad = new THREE.Vector3();
+  for (let i = 0; i < DR_N; i++){
+    const th = i / DR_N * TWO_PI;
+    rad.set(Math.cos(th), Math.sin(th), 0);
+    t.set(-Math.sin(th), Math.cos(th), 0);
+    _drM.makeBasis(t, out, rad);
+    _drQ.setFromRotationMatrix(_drM);
+    _drP.copy(rad).multiplyScalar(r);
+    _drM.compose(_drP, _drQ, _drS.set(w / ((TWO_PI * r / DR_N) * 0.92), 1, 1));
+    drCollectors.setMatrixAt(i, _drM);
+  }
+  drCollectors.instanceMatrix.needsUpdate = true;
+}
+function buildRing(r){
+  if (drBand){ drGroup.remove(drBand); drBand.geometry.dispose(); drBand = null; }
+  if (drCollectors){ drGroup.remove(drCollectors); drCollectors.geometry.dispose(); drCollectors = null; }
+  if (drConduit){ drGroup.remove(drConduit); drConduit.geometry.dispose(); drConduit = null; }
+  const h = r * DR_H;
+  drBand = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 128, 1, true), drMat);
+  drBand.rotation.x = Math.PI / 2;          // 圓柱預設軸為 Y, 轉到黃道面的法線 (區域 Z)
+  drGroup.add(drBand);
+  const dep = Math.max(r * 0.016, 0.45), hgt = h * 0.86;
+  drCollectors = new THREE.InstancedMesh(new THREE.BoxGeometry(1, hgt, dep), drColMat, DR_N);
+  drGroup.add(drCollectors);
+  // 導管略大於環半徑, 避免與帶共面閃爍
+  drConduit = new THREE.Mesh(new THREE.TorusGeometry(r * 1.004, Math.max(r * 0.004, 0.12), 8, 256), drConduitMat);
+  drGroup.add(drConduit);
+  drLayout();
+  dr.omega = TWO_PI / Math.pow(ds.radiusAU, 1.5);   // 克卜勒: ω = 2π/a^1.5 (rad/年)
 }
 
 function dsApply(){
-  const T = dsShellTemp(ds.radiusAU), r = distScale(ds.radiusAU);
-  if (dsMesh){ dsGroup.remove(dsMesh); dsMesh.geometry.dispose(); }
-  dsMesh = new THREE.Mesh(new THREE.SphereGeometry(r, 96, 64), dsMat);
-  dsGroup.add(dsMesh);
+  const isShell = ds.mode === 'shell';
+  const T = isShell ? dsShellTemp(ds.radiusAU) : drShellTemp(ds.radiusAU);
+  const r = distScale(ds.radiusAU);
+  if (dsMesh){ dsGroup.remove(dsMesh); dsMesh.geometry.dispose(); dsMesh = null; }
+  if (isShell){
+    dsMesh = new THREE.Mesh(new THREE.SphereGeometry(r, 96, 64), dsMat);
+    dsGroup.add(dsMesh);
+  }
+  buildRing(r);                              // 兩種模式都建, 顯示哪個由 visible 決定
   dsR = r;
   const [cr, cg, cb] = blackbodyRGB(T);
   dsUniforms.uColor.value.setRGB(cr / 255, cg / 255, cb / 255);
-  // 光學模式: 強度依實際光學佔比 → 幾乎為 0 (誠實)
-  // 紅外偽色模式: 顯示殼的廢熱, 色相取自 blackbodyRGB(T)。
-  // 增益壓在 0.25 (線性值 <1): ACES filmic tonemapping 會對超過線性 1.0
-  // 的亮色去飽和, 把 777 K 的深紅沖淡成琥珀色 (讀作 ~3500 K, 誤導溫度)。
-  // 實測增益→色相誤差 (0.15/0.25/0.35 AU 三點):
-  //   0.90→18.8/17.0/13.2°  0.35→9.4/6.2/3.0°  0.25→6.0/4.0/1.0°  0.18→4.0/2.0/2.0°
-  // 0.25 在「色相忠實 (≤6°)」與「對黑色太空仍清晰可見 (亮度 ~150/255)」之間取平衡。
-  dsUniforms.uGlow.value = ds.ir ? 0.25 : 0.0;
-  // 遮蔽只在殼開啟時生效
+  drUniforms.uColor.value.setRGB(cr / 255, cg / 255, cb / 255);
+  // 光學模式: 熱輻射強度依實際光學佔比 → 幾乎為 0 (誠實)
+  // 紅外偽色模式: 顯示廢熱, 色相取自 blackbodyRGB(T)。
+  // 增益壓在 0.25 (線性值 <1): ACES 會對超過線性 1.0 的亮色去飽和,
+  // 把 ~700 K 的深紅沖淡成讀作 ~3500 K 的琥珀色。
+  // 實測增益→色相誤差 (0.15/0.25/0.35 AU): 0.90→18.8/17.0/13.2°,
+  // 0.35→9.4/6.2/3.0°, 0.25→6.0/4.0/1.0°。取 0.25 平衡忠實與可見。
+  const g = ds.ir ? 0.25 : 0.0;
+  dsUniforms.uGlow.value = g;
+  drUniforms.uGlow.value = g;
+  dsGroup.visible = ds.on && isShell;
+  drGroup.visible = ds.on && !isShell;
   dsSetFade(ds.on ? 1 : 0);
 }
 
 function dsPerturb(mag){
-  // 隨機方向的一小段初速; 殼定理保證之後**不再受力**, 所以是等速漂移
-  const th = Math.random() * Math.PI, ph = Math.random() * Math.PI * 2;
-  ds.vel.set(Math.sin(th) * Math.cos(ph), Math.sin(th) * Math.sin(ph), Math.cos(th)).multiplyScalar(mag);
+  if (ds.mode === 'shell'){
+    // 殼定理保證之後**不再受力**, 所以是等速漂移
+    const th = Math.random() * Math.PI, ph = Math.random() * Math.PI * 2;
+    ds.vel.set(Math.sin(th) * Math.cos(ph), Math.sin(th) * Math.sin(ph), Math.cos(th)).multiplyScalar(mag);
+  } else {
+    // 環: 開普勒勢中徑向擾動以週轉頻率 κ=Ω 做【有界】振盪 (epicyclic 模式)。
+    // 與殼的中性平衡 (漂走) 截然不同 —— 同一個按鈕, 兩種穩定性示範。
+    dr.amp = 0.06;
+    dr.phase = Math.random() * TWO_PI;
+    dr.t = 0;
+  }
   ds.collided = false;
 }
 
-// 每幀推進: 中性平衡 → 無加速度, 只有等速漂移; 內壁撞上恆星即停住並告警
+// 每幀推進。殼: 中性平衡 → 等速漂移, 內壁撞恆星即停。環: 克卜勒軌道旋轉
+// + 擾動後的有界徑向振盪 (以整環同相的 coherent mode 呈現)。
 function dsStep(simDt){
-  if (!ds.on || ds.collided) return;
-  const k = simDt * simSpeed * 6;   // 6 = 場景單位/年的漂移速率尺度, 讓擾動肉眼可見
-  ds.offset.addScaledVector(ds.vel, k);
-  const maxOff = Math.max(dsR - SUN_R, 0);
-  if (ds.offset.length() > maxOff){
-    ds.offset.setLength(maxOff);
-    ds.vel.set(0, 0, 0);
-    ds.collided = true;             // 內壁已撞上恆星: 殼會被摧毀 (此處僅停止並告警)
-    renderDysonStats();
+  if (!ds.on) return;
+  if (ds.mode === 'shell'){
+    if (ds.collided) return;
+    const k = simDt * simSpeed * 6;   // 6 = 場景單位/年的漂移速率尺度, 讓擾動肉眼可見
+    ds.offset.addScaledVector(ds.vel, k);
+    const maxOff = Math.max(dsR - SUN_R, 0);
+    if (ds.offset.length() > maxOff){
+      ds.offset.setLength(maxOff);
+      ds.vel.set(0, 0, 0);
+      ds.collided = true;             // 內壁已撞上恆星: 殼會被摧毀 (此處僅停止並告警)
+      renderDysonStats();
+    }
+    dsGroup.position.copy(ds.offset);
+  } else {
+    dr.angle += simDt * simSpeed * dr.omega;
+    dr.t += simDt * simSpeed;
+    drGroup.rotation.z = dr.angle;
+    // κ = Ω: 振盪與軌道同頻, 有界且不衰減 (無耗散)
+    drGroup.scale.setScalar(dr.amp > 0 ? 1 + dr.amp * Math.cos(dr.omega * dr.t + dr.phase) : 1);
   }
-  dsGroup.position.copy(ds.offset);
 }
 
 function dsStatsHTML(){
-  const T = dsShellTemp(ds.radiusAU), f = ds.cover;
-  const P = f * DS_L * (1 - DS_ALBEDO);
-  const optPct = dsOpticalFrac(T) * 100, leak = 1 - f;
+  const isShell = ds.mode === 'shell';
+  const T = isShell ? dsShellTemp(ds.radiusAU) : drShellTemp(ds.radiusAU);
+  const f = ds.cover;
+  const blk = dsBlockFrac();
+  const P = blk * DS_L * (1 - DS_ALBEDO);   // 殼=f·L; 環=f·(h/2)·L
+  const optPct = dsOpticalFrac(T) * 100, leak = 1 - blk;
   const rows = t('ds.stats', {
     T: T.toFixed(0), lmax: (DS_WIEN / T * 1e6).toFixed(2),
     pW: P.toExponential(2), kard: (P / DS_KARD_II).toFixed(2),
@@ -1566,8 +1745,12 @@ function dsStatsHTML(){
       : `<span class="ds-full">${seg[0]}</span>`;
   });
   const ratioTxt = dsOpticalRatio(T).toExponential(1);
-  if (ds.collided) parts.push(`<span class="ds-warn">${t('ds.warn.crash')}</span>`);
-  else parts.push(`<span class="ds-warn">${t('ds.warn.instab')}</span>`);
+  if (isShell){
+    if (ds.collided) parts.push(`<span class="ds-warn">${t('ds.warn.crash')}</span>`);
+    else parts.push(`<span class="ds-warn">${t('ds.warn.instab')}</span>`);
+  } else {
+    parts.push(`<span class="ds-note">${t('ds.note.ring')}</span>`);
+  }
   if (T > 2000) parts.push(`<span class="ds-warn">${t('ds.warn.material')}</span>`);
   parts.push(`<span class="ds-note">${ds.ir
     ? t('ds.note.ir',  { lmax: (DS_WIEN / T * 1e6).toFixed(2), ratio: DS_IR_RATIO })
@@ -1575,7 +1758,7 @@ function dsStatsHTML(){
   // 光學模式下補上「能量去哪了」: 這是理解戴森球為何要用紅外搜尋的關鍵,
   // 光說「殼是黑的」會讓人以為能量消失了 (違反能量守恆)
   if (!ds.ir) parts.push(`<span class="ds-note">${t('ds.note.dark', { opt: optPct < 0.01 ? optPct.toFixed(4) : optPct.toFixed(2) })}</span>`);
-  if (f > 0.999) parts.push(`<span class="ds-note">${t('ds.note.leak', { lmax: (DS_WIEN / T * 1e6).toFixed(2) })}</span>`);
+  if (isShell && f > 0.999) parts.push(`<span class="ds-note">${t('ds.note.leak', { lmax: (DS_WIEN / T * 1e6).toFixed(2) })}</span>`);
   return parts.join('');
 }
 function renderDysonStats(){
@@ -1589,18 +1772,38 @@ function dsSetEnabled(){
   $('dsIR').classList.toggle('on', ds.ir);
   document.querySelectorAll('.ds-ctl, #dsPerturb, #dsIR').forEach(el => el.classList.toggle('ds-off', !ds.on));
   $('dsStats').style.display = ds.on ? '' : 'none';
+  dsSyncLabels();
   renderDysonStats();
 }
+// 半徑標籤依模式換詞 (殼半徑 / 環半徑)。不用全域 applyStatic():
+// 它會重套所有 [data-i18n], 在載入早期可能蓋掉進度文字。
+function dsSyncLabels(){
+  const lbl = $('dsRadLabel');
+  if (lbl) lbl.textContent = t(ds.mode === 'shell' ? 'dyson.radius' : 'dyson.radiusRing');
+}
+
+$('dsMode').addEventListener('change', e => {
+  ds.mode = e.target.value;
+  // 切換型態 = 重建結構並重置擾動狀態 (殼的漂移與環的振盪互不適用)
+  ds.offset.set(0,0,0); ds.vel.set(0,0,0); ds.collided = false;
+  dr.amp = 0; dr.t = 0;
+  if (ds.on) dsApply();
+  dsSetEnabled();
+  armUiIdle();
+});
 
 $('tDyson').addEventListener('click', () => {
+  const wasShell = ds.mode === 'shell';
   ds.on = !ds.on;
-  dsGroup.visible = true;                       // 透明度交給 fadeTo 漸變
-  if (!ds.on){ ds.offset.set(0,0,0); ds.vel.set(0,0,0); ds.collided = false; }
+  if (!ds.on){ ds.offset.set(0,0,0); ds.vel.set(0,0,0); ds.collided = false; dr.amp = 0; }
   dsApply();                                    // 先重建幾何/顏色 (遮蔽會被設成目標值)
+  // 關閉時必須讓「原本可見的那個群組」留在畫面上跑完淡出,
+  // 否則 dsApply 已把它隱藏, fadeTo 的透明度動畫就沒人看得到
+  if (!ds.on){ dsGroup.visible = wasShell; drGroup.visible = !wasShell; }
   const from = ds.on ? 0 : 1, to = ds.on ? 1 : 0;
   dsSetFade(from);                              // 再覆寫回起點: 否則關閉時恆星會瞬間跳回全亮, 漸變失去意義
   fadeTo('dyson', v => dsSetFade(v), from, to, 220,
-    () => { if (!ds.on){ dsGroup.visible = false; dsSetFade(0); } });   // 保底: 漸變被中斷也要回到全亮
+    () => { if (!ds.on){ dsGroup.visible = false; drGroup.visible = false; dsSetFade(0); } });
   dsSetEnabled();
   armUiIdle();
 });
@@ -1626,7 +1829,7 @@ $('dsCover').addEventListener('input', e => {
 $('dsRadius').addEventListener('input', e => {
   ds.radiusAU = parseFloat(e.target.value);
   $('dsRadVal').textContent = ds.radiusAU.toFixed(2) + ' AU';
-  if (ds.on){ dsApply(); dsGroup.position.copy(ds.offset); ds.collided = false; ds.vel.set(0,0,0); ds.offset.set(0,0,0); }
+  if (ds.on){ dsApply(); dsGroup.position.copy(ds.offset); ds.collided = false; ds.vel.set(0,0,0); ds.offset.set(0,0,0); dr.amp = 0; }
   renderDysonStats();
   armUiIdle();
 });
@@ -1692,6 +1895,8 @@ function animate(){
 
   // 太陽 / 星空 / 吸積盤 動畫
   sunUniforms.uTime.value = simTime;
+  dsUniforms.uTime.value = simTime;   // 結構照明動畫 (人造光源, 與 simTime 同步)
+  drUniforms.uTime.value = simTime;
   starMat.uniforms.uTime.value = simTime * 0.5;
   if (bhOn) BH.diskMat.uniforms.uTime.value = simTime * 0.5;
 
@@ -1815,6 +2020,7 @@ function renderDynamicUI(){
   // 4. 載入進度 (若已淡出, renderLoaderTex 自行 return)
   renderLoaderTex();
   renderDysonStats();   // 換語言時物理讀數也要重新取詞
+  dsSyncLabels();       // 殼/環的半徑標籤也要跟著換語言
 }
 window.addEventListener('langchange', renderDynamicUI);
 renderDynamicUI(); // 初始同步: index.html 的預置文字一律是中文, 語言為 en 時靠這裡轉正
