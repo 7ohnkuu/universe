@@ -334,7 +334,8 @@ radius range.
 ### The ring: a different physics, and a different stability
 
 The ring is a band of `h = 0.08·R` made of 120 independent collectors, each on
-its own circular Keplerian orbit (`ω = 2π/a^1.5`). Three consequences follow,
+its own circular Keplerian orbit (`ω = 2π/a^1.5`), plus an inner chain of 24
+shadow-square collectors at 0.86× the radius on a faster orbit (below). Three consequences follow,
 all asserted in the test suite:
 
 - **Cooler.** A flat collector radiates from both faces with no self-
@@ -363,6 +364,34 @@ illumination, not thermal emission** — they sit in a separate uniform from the
 blackbody glow, so turning on infrared false colour still shows only the
 physically computed waste heat. The pulse animation runs on simulation time,
 so it freezes when the tab is hidden or the clock is paused.
+
+Three of those motifs are borrowed from the classic depictions of Dyson
+structures — as *design language*, not as assets (no film texture or model is
+used anywhere; everything is procedural). Where a motif has an energy
+consequence, the consequence is paid for in the bookkeeping:
+
+- **Iris hatches** (Star Trek TNG, *Relics*, 1992 — the first Dyson sphere on
+  screen): six circular apertures with radial blades around the shell's
+  equator. They are real holes: their 2% of the sphere's area is subtracted
+  from the effective coverage, so at 100% coverage the star dims to 2%, not
+  0%, and the escaping-luminosity readout says so.
+- **Shadow-square chain** (Niven's *Ringworld*, 1970 — the visual ancestor of
+  Halo): an inner orbit of 24 collectors at 0.86× the ring radius, on its own
+  faster Keplerian orbit (`(1/0.86)^1.5 ≈ 1.254×` the outer rate). It fills
+  the outer band's gaps, so its interception is `F·(1−f)` and the ring's
+  blocked fraction becomes `(h/2)·[f + F(1−f)²]`. At f=0 the ring is invisible
+  but the swarm still blocks 2% — measured, not asserted.
+- **Discrete-collector grain** (Stapledon's *Star Maker*, 1937, and Dyson's
+  own 1960 *Science* paper, which described a *swarm*, not a shell): the
+  panelled, segmented surface reads as assembled hardware rather than a
+  smooth planet.
+
+One caveat worth stating: the films almost always show *habitable* structures
+(a lit interior in TNG, a landscape inside Halo's ring). This model is a
+*collector*: a habitable shell would have to let light reach its inner
+surface, would not dim the star, and would therefore show no infrared excess —
+the exact signature these searches rely on. The two energy stories cannot be
+merged into one toggle.
 
 ### Neutral equilibrium, not a spring
 

@@ -1491,8 +1491,26 @@ const dsMat = new THREE.ShaderMaterial({
       vec3 base = steel + seam * lamp * 0.10 * uLights
                         + pulse * lamp * 0.16 * uLights
                         + rim * vec3(0.05, 0.07, 0.1);
+      // 虹膜艙門 (Star Trek TNG 〈Relics〉的視覺母題): 赤道帶 6 個圓形開口,
+      // 內有輻射狀閘葉。開口是【真實的洞】—— alpha 在此降低, 且其面積已從
+      // 有效覆蓋率扣除 (DS_IRIS_FRAC), 所以恆星變暗程度與讀數一致。
+      float iris = 0.0, irisRim = 0.0, blades = 0.0;
+      for (int i = 0; i < 6; i++){
+        vec2 c = vec2((float(i) + 0.5) / 6.0, 0.5);
+        vec2 d = (vUv - c) * vec2(1.0, 2.2);        // v 方向拉伸以補球面壓縮
+        float dd = length(d);
+        const float rA = 0.032;
+        float m = smoothstep(rA, rA * 0.86, dd);    // 1 = 開口內
+        iris = max(iris, m);
+        irisRim = max(irisRim, smoothstep(rA * 1.3, rA, dd) * smoothstep(rA * 0.75, rA, dd));
+        float ang = atan(d.y, d.x);
+        blades = max(blades, m * (0.5 + 0.5 * sin(ang * 9.0 + uTime * 0.35)));
+      }
       vec3 col = base + uColor * uGlow;             // uGlow = 熱輻射 (僅紅外模式)
-      gl_FragColor = vec4(col, uOpacity);
+      col = mix(col, steel * 0.3 + blades * lamp * 0.22 * uLights, iris);  // 開口內: 閘葉
+      col += irisRim * lamp * 0.6 * uLights;        // 艙門發光邊緣
+      float alpha = uOpacity * (1.0 - iris * 0.9);  // 開口幾乎透明
+      gl_FragColor = vec4(col, alpha);
     }`,
 });
 const dsGroup = new THREE.Group();
@@ -1546,24 +1564,17 @@ const drMat = new THREE.ShaderMaterial({
       vec3 steel = vec3(0.012, 0.014, 0.02);
       vec3 lamp  = vec3(0.35, 0.62, 0.95);
       vec3 base = steel * (0.4 + 0.6 * edge)
-                + seam * lamp * 0.30 * uLights
-                + pulse * lamp * 0.55 * uLights
-                + spine * lamp * 0.35 * uLights
-                + edge * vec3(0.05, 0.075, 0.11);
+                + seam * lamp * 0.55 * uLights
+                + pulse * lamp * 0.95 * uLights
+                + spine * lamp * 0.60 * uLights
+                + edge * vec3(0.07, 0.10, 0.15);
       vec3 col = base + uColor * uGlow;
       gl_FragColor = vec4(col, uOpacity);
     }`,
 });
 // 收集器專用材質: 向陽面是吸光的深色集能板, 背陽與側面是人造照明的冷色桁架。
 // BoxGeometry 的 local -Z 指向恆星 (basis 的第三軸是徑向外), 故以 vN.z 判別向陽面。
-const drColMat = new THREE.ShaderMaterial({
-  uniforms: drUniforms,
-  transparent: true,
-  side: THREE.DoubleSide,
-  vertexShader: `varying vec2 vUv; varying vec3 vN;
-    void main(){ vUv = uv; vN = normalize(normalMatrix * normal);
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: `
+const DR_COL_FRAG = `
     varying vec2 vUv; varying vec3 vN;
     uniform vec3 uColor; uniform float uGlow; uniform float uOpacity;
     uniform float uTime; uniform float uLights;
@@ -1574,10 +1585,32 @@ const drColMat = new THREE.ShaderMaterial({
       // 側面桁架照明 + 沿板長的脈衝
       float flow = fract(vUv.x * 2.0 - uTime * 0.12);
       float pulse = smoothstep(0.0, 0.08, flow) * smoothstep(0.2, 0.08, flow);
-      vec3 col = mix(lamp * (0.22 + 0.5 * pulse) * uLights, absorber, sunward);
+      // 板緣輪廓光: 讓方塊在恆星輝光前仍能讀出形狀 (裝飾層, 非熱輻射)
+      vec2 eg = abs(vUv - 0.5);
+      float edge = smoothstep(0.42, 0.5, max(eg.x, eg.y));
+      vec3 col = mix(lamp * (0.55 + 0.9 * pulse) * uLights + edge * lamp * 0.8 * uLights,
+                     absorber + edge * lamp * 0.5 * uLights, sunward * 0.85);
       col += uColor * uGlow * (0.3 + 0.7 * sunward);     // 紅外偽色時向陽面更亮
       gl_FragColor = vec4(col, uOpacity);
-    }`,
+    }`;
+const DR_COL_VERT = `varying vec2 vUv; varying vec3 vN;
+    void main(){ vUv = uv; vN = normalize(normalMatrix * normal);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const drColMat = new THREE.ShaderMaterial({
+  uniforms: drUniforms, transparent: true, side: THREE.DoubleSide,
+  vertexShader: DR_COL_VERT, fragmentShader: DR_COL_FRAG,
+});
+// 內軌 swarm 用同一個著色器但【獨立的不透明度】: swarm 填補外環的縫隙,
+// 所以 f 越低它越明顯 —— 與外環帶的 cover·v 正好相反。若共用 uOpacity,
+// f=0 時 swarm 會變成隱形, 與物理意義 (s = F·(1-f)) 完全顛倒。
+const drSwarmUniforms = {
+  uColor: drUniforms.uColor, uGlow: drUniforms.uGlow,
+  uTime: drUniforms.uTime, uLights: drUniforms.uLights,
+  uOpacity: { value: 0 },
+};
+const drSwarmMat = new THREE.ShaderMaterial({
+  uniforms: drSwarmUniforms, transparent: true, side: THREE.DoubleSide,
+  vertexShader: DR_COL_VERT, fragmentShader: DR_COL_FRAG,
 });
 // 能量導管: 沿環中線的附加混合亮環, 輸能的視覺隱喻 (純裝飾, 不參與物理)
 const drConduitMat = new THREE.MeshBasicMaterial({
@@ -1589,7 +1622,13 @@ const drGroup = new THREE.Group();
 drGroup.visible = false;
 ecliptic.add(drGroup);
 let drBand = null, drCollectors = null;
-const dr = { angle: 0, omega: 0, periodYr: 1, amp: 0, phase: 0, t: 0 };
+// 內軌 swarm 必須是【獨立群組】: 較小半徑 → 較快克卜勒角速度,
+// 若掛在 drGroup 下會被迫與外環同速旋轉, 那就違反開普勒第三定律。
+const drSwarmGroup = new THREE.Group();
+drSwarmGroup.visible = false;
+ecliptic.add(drSwarmGroup);
+let drSwarm = null;
+const dr = { angle: 0, omega: 0, omegaInner: 0, periodYr: 1, amp: 0, phase: 0, t: 0 };
 const _drM = new THREE.Matrix4(), _drQ = new THREE.Quaternion(),
       _drP = new THREE.Vector3(), _drS = new THREE.Vector3(), _drZ = new THREE.Vector3(0,0,1);
 
@@ -1597,8 +1636,24 @@ const ds = { on: false, ir: false, cover: 0.5, radiusAU: DS_DEF_AU, mode: 'shell
              offset: new THREE.Vector3(), vel: new THREE.Vector3(), collided: false };
 const DS_BASE_LIGHT = sunLight.intensity;   // 未遮蔽時的恆星強度
 
-// 遮蔽比例: 殼 = f (閉合殼擋住全部立體角); 環 = f·h/2 (緯度帶只擋 ±h/2)
-const dsBlockFrac = () => ds.mode === 'shell' ? ds.cover : ds.cover * DR_H / 2;
+// 遮蔽比例 (幾何遮光率, 決定恆星變暗與外逸光度):
+//   殼 = f·(1-IRIS): 赤道 6 座虹膜艙門常開, 開口不集能, 面積從有效覆蓋扣除
+//   環 = (h/2)·[f + F·(1-f)²]:
+//     外環帶擋 f。內軌 swarm 覆蓋 s = F·(1-f) (填補外環縫隙), 但它在
+//     較小半徑 → 較快角速度, 與外環的相位關係持續漂移, 所以它的陰影
+//     只有 (1-f) 的時間落在外環縫隙上 (時間平均) → 新增遮光 s·(1-f)。
+//     合計 f + F(1-f)²。f=1 時無縫可填 → 退回 h/2。
+const DS_IRIS_FRAC = 0.02;         // 虹膜艙門佔球面積比例 (TNG〈Relics〉母題)
+const DR_SWARM_FILL = 0.5;         // 內軌 swarm 填補外環縫隙的比例
+const DR_NSQ = 24;                 // 內軌收集器 (陰影方塊) 數量
+const DR_SWARM_R = 0.86;           // 內軌半徑 / 外環半徑。
+// 取 0.86 而非更貼外環的 0.94: 0.94 時內軌與外環帶在畫面上幾乎重合,
+// 被太陽輝光吞沒。0.86 在最小半徑 0.15 AU 時仍位於太陽視覺半徑之外
+// (distScale(0.15)×0.86 = 16.54 > SUN_R = 16), 且能讓陰影方塊剪影在
+// 恆星盤面上 —— Ringworld 的經典畫面。
+const dsBlockFrac = () => ds.mode === 'shell'
+  ? ds.cover * (1 - DS_IRIS_FRAC)
+  : (DR_H / 2) * (ds.cover + DR_SWARM_FILL * Math.pow(1 - ds.cover, 2));
 // 環溫度 = 殼溫度 / 2^(1/4): 平板兩面輻射, 無自身再吸收
 const drShellTemp = R_au => dsShellTemp(R_au) / Math.pow(2, 0.25);
 
@@ -1612,6 +1667,11 @@ function dsSetFade(v){
   const blk = dsBlockFrac() * v;
   dsUniforms.uOpacity.value = ds.mode === 'shell' ? ds.cover * v : 0;
   drUniforms.uOpacity.value = ds.mode === 'ring'  ? ds.cover * v : 0;
+  // swarm 填縫: f 越低越明顯 (s = F·(1-f)), 與外環帶相反。
+  // 不透明度取 min(1, s·2.2) 而非 s 本身: 集能板是暗色, 若直接用 s=0.35
+  // 在黑色太空背景上幾乎隱形。放大後仍單調、且 f=1 時 s=0 → 隱形 (正確:
+  // 外環帶已完整, 沒有縫隙需要填補)。物理遮光率仍用解析的 s, 不受此影響。
+  drSwarmUniforms.uOpacity.value = ds.mode === 'ring' ? Math.min(1, DR_SWARM_FILL * (1 - ds.cover) * 2.2) * v : 0;
   drConduitMat.opacity = ds.mode === 'ring' ? ds.cover * v * 0.45 : 0;   // 導管亮度隨覆蓋率
   sunLight.intensity = DS_BASE_LIGHT * (1 - blk);
   sunUniforms.uVis.value = 1 - blk;
@@ -1639,10 +1699,29 @@ function drLayout(){
   }
   drCollectors.instanceMatrix.needsUpdate = true;
 }
+function drSwarmLayout(r){
+  if (!drSwarm) return;
+  const ri = r * DR_SWARM_R;
+  const w = (TWO_PI * ri / DR_NSQ) * 0.85;
+  const hgt = r * DR_H * 0.9, dep = Math.max(r * 0.024, 0.6);
+  const out = new THREE.Vector3(0, 0, 1), rad = new THREE.Vector3(), t = new THREE.Vector3();
+  for (let i = 0; i < DR_NSQ; i++){
+    const th = i / DR_NSQ * TWO_PI;
+    rad.set(Math.cos(th), Math.sin(th), 0);
+    t.set(-Math.sin(th), Math.cos(th), 0);
+    _drM.makeBasis(t, out, rad);
+    _drQ.setFromRotationMatrix(_drM);
+    _drP.copy(rad).multiplyScalar(ri);
+    _drM.compose(_drP, _drQ, _drS.set(w, hgt, dep));
+    drSwarm.setMatrixAt(i, _drM);
+  }
+  drSwarm.instanceMatrix.needsUpdate = true;
+}
 function buildRing(r){
   if (drBand){ drGroup.remove(drBand); drBand.geometry.dispose(); drBand = null; }
   if (drCollectors){ drGroup.remove(drCollectors); drCollectors.geometry.dispose(); drCollectors = null; }
   if (drConduit){ drGroup.remove(drConduit); drConduit.geometry.dispose(); drConduit = null; }
+  if (drSwarm){ drSwarmGroup.remove(drSwarm); drSwarm.geometry.dispose(); drSwarm = null; }
   const h = r * DR_H;
   drBand = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 128, 1, true), drMat);
   drBand.rotation.x = Math.PI / 2;          // 圓柱預設軸為 Y, 轉到黃道面的法線 (區域 Z)
@@ -1653,8 +1732,13 @@ function buildRing(r){
   // 導管略大於環半徑, 避免與帶共面閃爍
   drConduit = new THREE.Mesh(new THREE.TorusGeometry(r * 1.004, Math.max(r * 0.004, 0.12), 8, 256), drConduitMat);
   drGroup.add(drConduit);
+  // 內軌 swarm (陰影方塊鏈, Ringworld 母題): 獨立群組、獨立角速度、獨立不透明度
+  drSwarm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), drSwarmMat, DR_NSQ);
+  drSwarmGroup.add(drSwarm);
+  drSwarmLayout(r);
   drLayout();
-  dr.omega = TWO_PI / Math.pow(ds.radiusAU, 1.5);   // 克卜勒: ω = 2π/a^1.5 (rad/年)
+  dr.omega = TWO_PI / Math.pow(ds.radiusAU, 1.5);            // 外環: ω = 2π/a^1.5
+  dr.omegaInner = TWO_PI / Math.pow(ds.radiusAU * DR_SWARM_R, 1.5);  // 內軌較快
 }
 
 function dsApply(){
@@ -1682,6 +1766,7 @@ function dsApply(){
   drUniforms.uGlow.value = g;
   dsGroup.visible = ds.on && isShell;
   drGroup.visible = ds.on && !isShell;
+  drSwarmGroup.visible = ds.on && !isShell;
   dsSetFade(ds.on ? 1 : 0);
 }
 
@@ -1720,6 +1805,10 @@ function dsStep(simDt){
     dr.angle += simDt * simSpeed * dr.omega;
     dr.t += simDt * simSpeed;
     drGroup.rotation.z = dr.angle;
+    // 內軌 swarm 以自己的克卜勒角速度旋轉 (較快), 與外環相位持續漂移 ——
+    // 這正是遮光公式取時間平均 (1-f) 的原因。擾動只作用於外環:
+    // 對內軌施加擾動是另一回事, 此處不假裝它們會同步振盪。
+    drSwarmGroup.rotation.z += simDt * simSpeed * dr.omegaInner;
     // κ = Ω: 振盪與軌道同頻, 有界且不衰減 (無耗散)
     drGroup.scale.setScalar(dr.amp > 0 ? 1 + dr.amp * Math.cos(dr.omega * dr.t + dr.phase) : 1);
   }
@@ -1799,11 +1888,11 @@ $('tDyson').addEventListener('click', () => {
   dsApply();                                    // 先重建幾何/顏色 (遮蔽會被設成目標值)
   // 關閉時必須讓「原本可見的那個群組」留在畫面上跑完淡出,
   // 否則 dsApply 已把它隱藏, fadeTo 的透明度動畫就沒人看得到
-  if (!ds.on){ dsGroup.visible = wasShell; drGroup.visible = !wasShell; }
+  if (!ds.on){ dsGroup.visible = wasShell; drGroup.visible = !wasShell; drSwarmGroup.visible = !wasShell; }
   const from = ds.on ? 0 : 1, to = ds.on ? 1 : 0;
   dsSetFade(from);                              // 再覆寫回起點: 否則關閉時恆星會瞬間跳回全亮, 漸變失去意義
   fadeTo('dyson', v => dsSetFade(v), from, to, 220,
-    () => { if (!ds.on){ dsGroup.visible = false; drGroup.visible = false; dsSetFade(0); } });
+    () => { if (!ds.on){ dsGroup.visible = false; drGroup.visible = false; drSwarmGroup.visible = false; dsSetFade(0); } });
   dsSetEnabled();
   armUiIdle();
 });
