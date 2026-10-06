@@ -48,6 +48,21 @@
       'btn.lens': '引力透鏡',
       'btn.bh': '黑洞',
 
+      'grp.dyson': '戴森殼',
+      'btn.dyson': '戴森殼',
+      'btn.dsPerturb': '施加擾動',
+      'btn.dsIR': '紅外偽色',
+      'ds.warn.crash': '✖ 殼已漂移至內壁撞上恆星 —— 中性平衡沒有回復力, 這就是剛性戴森球不可行的原因。重新開啟或改變半徑可重置。',
+      'ds.note.ir': '★ 這是【紅外偽色】視圖, 不是肉眼所見: 顯示殼以 λmax {lmax} µm 釋出的廢熱。紅外功率是殘餘恆星的約 {ratio} 倍 —— 這就是戴森球在紅外波段極易偵測、在光學波段幾乎隱形的原因。',
+      'ds.note.opt': '★ 這是【光學】視圖, 即肉眼所見: 殼的光學輻射僅為恆星的 {ratio}, 所以殼看起來是黑的。唯一可觀測效應是恆星變暗至 {leak} L☉, 行星同步變暗。',
+      'dyson.cover': '覆蓋率',
+      'dyson.radius': '殼半徑',
+      'ds.stats': '殼溫 T\t<b>{T} K</b>\n峰值波長 λmax\t<b>{lmax} µm</b>\n攔截功率 P\t<b>{pW} W</b>\n相當 Kardashev II\t<b>×{kard}</b>\n光學波段佔比\t<b>{opt}%</b>\n外逸光度\t<b>{leak} L☉</b>',
+      'ds.warn.instab': '⚠ 殼定理: 均勻剛性殼在恆星重力與輻射下淨力為零 → 中性平衡, 無回復力。任何擾動會持續漂移直至撞上恆星 (已實測收斂至 1e-12)。\n參: arXiv 2409.10602 —— 偶極模式線性不穩定, 「徑向穩定」不等於穩定。',
+      'ds.warn.material': '⚠ 此半徑下殼溫超過材料昇華點, 需主動冷卻; 實際可建範圍受限於難熔材料。',
+      'ds.note.dark': '★ 光學波段僅 {opt}%: 在可見光下殼是黑的, 能量全部移到紅外線。這正是 Project Hephaistos / Ĝ 搜尋用「紅外超量」而非「光學變暗」的原因 (arXiv 2607.09460, 2608.12458)。',
+      'ds.note.leak': '★ f=100% 時恆星對外完全不可見, 只剩 λmax {lmax} µm 的廢熱輻射。',
+
       'ui.hint': '拖曳旋轉 · 滾輪縮放 · 右鍵平移 (觸控: 單指旋轉 · 雙指縮放/平移)。<br/>' +
                  '<b>點擊行星 / 太陽 / 黑洞</b>可自動飛行靠近並持續追蹤。<br/>' +
                  '軌道距離已壓縮以便觀察，但行星相對週期、偏心率、軌道傾角均依真實數據。',
@@ -58,7 +73,7 @@
       'loader.tex': '載入中 · 貼圖 {done}/{total}',
       'loader.texBytes': '載入中 · 貼圖 {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': '載入進度',
-      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡',
+      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼',
 
       'label.bh': '黑洞 (引力透鏡)',
       'opt.bh': '黑洞',
@@ -112,6 +127,21 @@
       'btn.lens': 'Lensing',
       'btn.bh': 'Black hole',
 
+      'grp.dyson': 'DYSON SHELL',
+      'btn.dyson': 'Dyson shell',
+      'btn.dsPerturb': 'Apply perturbation',
+      'btn.dsIR': 'IR false colour',
+      'ds.warn.crash': '✖ The shell has drifted until its inner wall hit the star — neutral equilibrium has no restoring force, which is exactly why a rigid Dyson sphere is not feasible. Re-enable it or change the radius to reset.',
+      'ds.note.ir': '★ This is an INFRARED FALSE-COLOUR view, not what an eye would see: it shows the waste heat the shell reradiates at λmax {lmax} µm. Its infrared power is about {ratio}× the surviving star — which is why a Dyson sphere is easy to spot in the infrared and nearly invisible optically.',
+      'ds.note.opt': '★ This is the OPTICAL view, i.e. what an eye sees: the shell’s optical emission is only {ratio} of the star’s, so the shell looks black. The one observable effect is the star dimming to {leak} L☉, and the planets dimming with it.',
+      'dyson.cover': 'Coverage',
+      'dyson.radius': 'Shell radius',
+      'ds.stats': 'Shell temp T\t<b>{T} K</b>\nPeak λmax\t<b>{lmax} µm</b>\nIntercepted power P\t<b>{pW} W</b>\nvs Kardashev II\t<b>×{kard}</b>\nOptical-band fraction\t<b>{opt}%</b>\nEscaping luminosity\t<b>{leak} L☉</b>',
+      'ds.warn.instab': '⚠ Shell theorem: a uniform rigid shell feels zero net force from the star’s gravity and radiation → neutral equilibrium, no restoring force. Any perturbation drifts until it hits the star (verified numerically to 1e-12).\nSee arXiv 2409.10602 — the dipole mode is linearly unstable; radial stability is not stability.',
+      'ds.warn.material': '⚠ At this radius the shell exceeds the sublimation point of the material; active cooling required. The buildable range is limited by refractory materials.',
+      'ds.note.dark': '★ Only {opt}% in the optical band: the shell is black to the eye; all the energy moves to infrared. That is why Project Hephaistos / Ĝ search for an infrared excess rather than optical dimming (arXiv 2607.09460, 2608.12458).',
+      'ds.note.leak': '★ At f=100% the star is entirely invisible from outside; only waste heat at λmax {lmax} µm escapes.',
+
       'ui.hint': 'Drag to orbit · scroll to zoom · right-drag to pan (touch: one finger to orbit · pinch to zoom or pan).<br/>' +
                  '<b>Click a planet, the Sun or the black hole</b> to fly in and keep tracking it.<br/>' +
                  'Orbital distances are compressed for viewing, but relative periods, eccentricities and inclinations use real data.',
@@ -123,7 +153,7 @@
       'loader.tex': 'Loading · textures {done}/{total}',
       'loader.texBytes': 'Loading · textures {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': 'Loading progress',
-      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing',
+      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell',
 
       'label.bh': 'Black hole (lensing)',
       'opt.bh': 'Black hole',

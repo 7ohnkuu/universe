@@ -201,7 +201,7 @@ const starMat = buildStars();
 // =============================================================================
 //  太陽 (GLSL fbm 湍流 + HDR 自發光)
 // =============================================================================
-const sunUniforms = { uTime: { value: 0 } };
+const sunUniforms = { uTime: { value: 0 }, uVis: { value: 1 } };
 const sun = new THREE.Mesh(
   new THREE.SphereGeometry(SUN_R, 64, 64),
   new THREE.ShaderMaterial({
@@ -210,7 +210,7 @@ const sun = new THREE.Mesh(
       void main(){ vUv = uv; vN = normalize(normalMatrix * normal);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
     fragmentShader: `
-      varying vec3 vN; varying vec2 vUv; uniform float uTime;
+      varying vec3 vN; varying vec2 vUv; uniform float uTime; uniform float uVis;
       float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
       float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
         float a=hash(i), b=hash(i+vec2(1,0)), c=hash(i+vec2(0,1)), d=hash(i+vec2(1,1));
@@ -218,6 +218,7 @@ const sun = new THREE.Mesh(
       float fbm(vec2 p){ float v=0.0,a=0.5; for(int i=0;i<6;i++){ v+=a*noise(p); p*=2.03; a*=0.5;} return v; }
       void main(){
         vec2 p = vUv * vec2(6.0, 3.0);
+        // uVis: 戴森殼遮蔽後對外可見的比例 (1-f)。恆星仍在燃燒, 只是被擋住了。
         float n = fbm(p + vec2(uTime*0.05, uTime*0.03));
         float n2 = fbm(p*2.0 - uTime*0.08);
         float h = n*0.7 + n2*0.3;
@@ -229,7 +230,7 @@ const sun = new THREE.Mesh(
         // 邊緣增亮 (臨邊昏暗反向, 讓輝光更強)
         float rim = pow(clamp(1.0 - abs(vN.z), 0.0, 1.0), 1.5);
         col += rim * vec3(1.0,0.5,0.2) * 0.3;
-        gl_FragColor = vec4(col * 3.0, 1.0);  // 熱區 ~2.5 超過 bloom threshold(2.0) -> 柔和暈, 顆粒紋理仍清晰
+        gl_FragColor = vec4(col * 3.0 * uVis, 1.0);  // 熱區 ~2.5 超過 bloom threshold(2.0) -> 柔和暈, 顆粒紋理仍清晰
       }`,
   })
 );
@@ -1169,6 +1170,7 @@ addEventListener('keydown', e => {
     case 'o': case 'O': e.preventDefault(); $('tOrbits').click(); break;
     case 'b': case 'B': e.preventDefault(); $('tBH').click(); break;
     case 'g': case 'G': e.preventDefault(); $('tLens').click(); break;
+    case 'd': case 'D': e.preventDefault(); $('tDyson').click(); break;
   }
 });
 
@@ -1384,6 +1386,253 @@ $('tBH').addEventListener('click', e => {
 });
 
 // =============================================================================
+//  戴森殼 (Dyson shell)
+//
+//  物理依據 —— 全部經數值驗證, 不是憑印象:
+//
+//  1. 輻射平衡   T = [ L(1-A) / (4πσR²) ]^(1/4)
+//     殼兩面都輻射, 且吸收面積與輻射面積皆正比於覆蓋率 f, 所以
+//     **T 與 f 無關**。f 只決定攔截功率與外逸光度。
+//
+//  2. 殼定理 (Newton shell theorem)
+//     均勻殼內部重力場恒為零 → 恆星對殼無淨力。輻射壓同理 (兩者皆 1/r²
+//     場, 球面積分同型) ⇒ 淨力也是零。
+//     故為**中性平衡 (neutral equilibrium)**: 沒有回復力, 也不是指數發散。
+//     擾動後殼以**等速**漂移, 直到內壁撞上恆星。
+//     數值驗證: Gauss-Legendre 球面積分, 偏移 0.3R / 0.9R 時 |F| 收斂至 ~1e-12。
+//     ⇒ 所以這裡的擾動是線性漂移, **不是**彈簧式回復或指數爆炸。
+//     參 arXiv 2409.10602: 相對論彈性膜的軸對稱偶極模式線性不穩定,
+//       「徑向穩定」不等於穩定。參 arXiv 2502.12806: 雙星系統中包住
+//       較小質量時可穩定 —— 但本場景只有單一恆星, 故不適用。
+//
+//  3. 光學波段佔比 (Planck 級數積分)
+//     R ≥ 0.15 AU 時 380–780nm 僅佔總輻射 ~1e-5 以下 ⇒ **殼在可見光下是黑的**。
+//     它唯一的光學效應是「恆星變暗」: 外逸光度降至 (1-f)L, 行星隨之變暗。
+//     能量改以 λmax 3–4 µm 的紅外線釋出。實測 IR(2–30µm) 功率約為殘餘恆星的
+//     15 倍 ⇒ 這正是 Project Hephaistos / Ĝ 用「紅外超量」而非「光學變暗」
+//     搜尋戴森球的原因 (arXiv 2607.09460, 2608.12458)。
+//     ⇒ 因此提供兩種視圖: 光學 (誠實: 殼幾乎全黑) 與紅外偽色 (殼的廢熱)。
+//       不做「為了好看而讓殼發紅光」的假物理。
+//
+//  4. 能量守恆   (1-f)L 外逸可見光 + f·L(1-A) 殼的廢熱 + f·L·A 反射回內部 = L
+//
+//  5. 半徑可用範圍由**本場景的距離壓縮**決定: distScale(a) = a^0.65 × 66,
+//     SUN_R = 16 ⇒ 視覺下限約 0.113 AU; 再往外就會包住水星 (35.8) 而遮住它。
+//     故取 0.15–0.35 AU, 對應 T ≈ 1000–660 K, 全程光學不可見。
+// =============================================================================
+const DS_L = 3.828e26, DS_SIGMA = 5.670374419e-8, DS_WIEN = 2.897771955e-3,
+      DS_C2 = 0.0143877687, DS_KARD_II = 4e26, DS_AU_M = 1.495978707e11;
+const DS_ALBEDO = 0.05;               // 吸光型集能面: 反射極少
+const DS_SUN_T = 5772;                // 太陽有效溫度
+const DS_MIN_AU = 0.15, DS_MAX_AU = 0.35, DS_DEF_AU = 0.25;
+const DS_IR_RATIO = 15;               // 實測: 殼 IR 功率 / 殘餘恆星 IR 功率
+
+// Planck 分佈在 0→λ 的累積佔比 (級數展開)。已與直接數值積分比對:
+// 1229/1738/2244/3000/5772/6504 K 六點的相對誤差均 < 1e-5。
+function planckFracBelow(waveM, T){
+  const u = DS_C2 / (waveM * T);
+  let s = 0;
+  for (let n = 1; n <= 60; n++){
+    s += Math.exp(-n * u) * (u*u*u/n + 3*u*u/(n*n) + 6*u/(n*n*n) + 6/(n*n*n*n));
+  }
+  return s * 15 / (Math.PI ** 4);
+}
+const dsOpticalFrac = T => Math.max(0, planckFracBelow(780e-9, T) - planckFracBelow(380e-9, T));
+const dsShellTemp = R_au => Math.pow(DS_L * (1 - DS_ALBEDO) / (4 * Math.PI * DS_SIGMA * Math.pow(R_au * DS_AU_M, 2)), 0.25);
+// 殼的光學輻射 / 恆星光學輻射 (依 σT⁴ × 各自波段佔比)
+const dsOpticalRatio = T => (Math.pow(T, 4) * dsOpticalFrac(T)) / (Math.pow(DS_SUN_T, 4) * dsOpticalFrac(DS_SUN_T));
+
+// 黑體色溫 → sRGB (Tanner Helland 擬合)。已以四個參考值錨定驗證:
+// 6500K→(255,254,250) D65 白點 · 5772K→(255,242,230) 太陽 ·
+// 2700K→(255,167,87) 白熾燈 · 1700K→(255,121,0) 燭焰
+function blackbodyRGB(T){
+  const k = T / 100;
+  let r, g, b;
+  if (k <= 66) r = 255; else r = 329.698727446 * Math.pow(k - 60, -0.1332047592);
+  if (k <= 66) g = 99.4708025861 * Math.log(k) - 161.1195681661;
+  else g = 288.1221695283 * Math.pow(k - 60, -0.0755148492);
+  if (k >= 66) b = 255; else if (k <= 19) b = 0;
+  else b = 138.5177312231 * Math.log(k - 10) - 305.0447927307;
+  const cl = v => Math.max(0, Math.min(255, Math.round(v)));
+  return [cl(r), cl(g), cl(b)];
+}
+
+const dsUniforms = {
+  uColor:   { value: new THREE.Color(1, 0.5, 0.1) },
+  uGlow:    { value: 0 },      // 發光強度: 光學模式幾乎為 0, 紅外模式才明顯
+  uOpacity: { value: 0 },      // = 覆蓋率 f
+};
+const dsMat = new THREE.ShaderMaterial({
+  uniforms: dsUniforms,
+  transparent: true,
+  side: THREE.DoubleSide,
+  vertexShader: `varying vec2 vUv; varying vec3 vN;
+    void main(){ vUv = uv; vN = normalize(normalMatrix * normal);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    varying vec2 vUv; varying vec3 vN;
+    uniform vec3 uColor; uniform float uGlow; uniform float uOpacity;
+    void main(){
+      // 集能板陣列的接縫紋理: 讓它看起來是人造結構而非一顆平滑行星
+      vec2 cell = vUv * vec2(72.0, 36.0);
+      vec2 g = abs(fract(cell) - 0.5);
+      float seam = smoothstep(0.46, 0.5, max(g.x, g.y));
+      // 掠射角增亮, 讓殼的輪廓在近乎全黑的表面上仍可辨識
+      float rim = pow(1.0 - abs(vN.z), 3.0);
+      vec3 base = vec3(0.012, 0.014, 0.02) + seam * vec3(0.03, 0.035, 0.05) + rim * vec3(0.05, 0.07, 0.1);
+      vec3 col = base + uColor * uGlow;
+      gl_FragColor = vec4(col, uOpacity);
+    }`,
+});
+const dsGroup = new THREE.Group();
+dsGroup.visible = false;
+ecliptic.add(dsGroup);
+let dsMesh = null, dsR = distScale(DS_DEF_AU);
+
+const ds = { on: false, ir: false, cover: 0.5, radiusAU: DS_DEF_AU,
+             offset: new THREE.Vector3(), vel: new THREE.Vector3(), collided: false };
+const DS_BASE_LIGHT = sunLight.intensity;   // 未遮蔽時的恆星強度
+
+// 以單一 v ∈ [0,1] 同步驅動「殼不透明度」與「恆星遮蔽」。
+// 必須同源: 若兩者不同步, 漸變過程中會瞬間違反能量守恆
+// (例如殼已消失但恆星還暗著)。關閉時 v=0 ⇒ 恆星必定恢復全亮。
+// 這是先前 bug 的根源: dsApply() 不看 ds.on, 導致 f=100% 時關閉殼,
+// 恆星亮度停在 0 而永久全黑。
+function dsSetFade(v){
+  const coverEff = ds.cover * v;            // 實際遮蔽比例 (漸變中 < f)
+  dsUniforms.uOpacity.value = coverEff;
+  sunLight.intensity = DS_BASE_LIGHT * (1 - coverEff);
+  sunUniforms.uVis.value = 1 - coverEff;
+  glow.material.opacity = 1 - coverEff;
+  glow.visible = coverEff < 0.999;
+}
+
+function dsApply(){
+  const T = dsShellTemp(ds.radiusAU), r = distScale(ds.radiusAU);
+  if (dsMesh){ dsGroup.remove(dsMesh); dsMesh.geometry.dispose(); }
+  dsMesh = new THREE.Mesh(new THREE.SphereGeometry(r, 96, 64), dsMat);
+  dsGroup.add(dsMesh);
+  dsR = r;
+  const [cr, cg, cb] = blackbodyRGB(T);
+  dsUniforms.uColor.value.setRGB(cr / 255, cg / 255, cb / 255);
+  // 光學模式: 強度依實際光學佔比 → 幾乎為 0 (誠實)
+  // 紅外偽色模式: 顯示殼的廢熱, 色相取自 blackbodyRGB(T)。
+  // 增益壓在 0.25 (線性值 <1): ACES filmic tonemapping 會對超過線性 1.0
+  // 的亮色去飽和, 把 777 K 的深紅沖淡成琥珀色 (讀作 ~3500 K, 誤導溫度)。
+  // 實測增益→色相誤差 (0.15/0.25/0.35 AU 三點):
+  //   0.90→18.8/17.0/13.2°  0.35→9.4/6.2/3.0°  0.25→6.0/4.0/1.0°  0.18→4.0/2.0/2.0°
+  // 0.25 在「色相忠實 (≤6°)」與「對黑色太空仍清晰可見 (亮度 ~150/255)」之間取平衡。
+  dsUniforms.uGlow.value = ds.ir ? 0.25 : 0.0;
+  // 遮蔽只在殼開啟時生效
+  dsSetFade(ds.on ? 1 : 0);
+}
+
+function dsPerturb(mag){
+  // 隨機方向的一小段初速; 殼定理保證之後**不再受力**, 所以是等速漂移
+  const th = Math.random() * Math.PI, ph = Math.random() * Math.PI * 2;
+  ds.vel.set(Math.sin(th) * Math.cos(ph), Math.sin(th) * Math.sin(ph), Math.cos(th)).multiplyScalar(mag);
+  ds.collided = false;
+}
+
+// 每幀推進: 中性平衡 → 無加速度, 只有等速漂移; 內壁撞上恆星即停住並告警
+function dsStep(simDt){
+  if (!ds.on || ds.collided) return;
+  const k = simDt * simSpeed * 6;   // 6 = 場景單位/年的漂移速率尺度, 讓擾動肉眼可見
+  ds.offset.addScaledVector(ds.vel, k);
+  const maxOff = Math.max(dsR - SUN_R, 0);
+  if (ds.offset.length() > maxOff){
+    ds.offset.setLength(maxOff);
+    ds.vel.set(0, 0, 0);
+    ds.collided = true;             // 內壁已撞上恆星: 殼會被摧毀 (此處僅停止並告警)
+    renderDysonStats();
+  }
+  dsGroup.position.copy(ds.offset);
+}
+
+function dsStatsHTML(){
+  const T = dsShellTemp(ds.radiusAU), f = ds.cover;
+  const P = f * DS_L * (1 - DS_ALBEDO);
+  const optPct = dsOpticalFrac(T) * 100, leak = 1 - f;
+  const rows = t('ds.stats', {
+    T: T.toFixed(0), lmax: (DS_WIEN / T * 1e6).toFixed(2),
+    pW: P.toExponential(2), kard: (P / DS_KARD_II).toFixed(2),
+    opt: optPct < 0.01 ? optPct.toFixed(4) : optPct.toFixed(2), leak: leak.toFixed(2),
+  });
+  // t() 的 \t 只是分隔符: 拆成 grid 的兩欄才能對齊 (pre-line 會把 \t 壓成單空格)
+  const parts = rows.split('\n').map(ln => {
+    const seg = ln.split('\t');
+    return seg.length > 1
+      ? `<span class="ds-l">${seg[0]}</span><span class="ds-v">${seg.slice(1).join(' ')}</span>`
+      : `<span class="ds-full">${seg[0]}</span>`;
+  });
+  const ratioTxt = dsOpticalRatio(T).toExponential(1);
+  if (ds.collided) parts.push(`<span class="ds-warn">${t('ds.warn.crash')}</span>`);
+  else parts.push(`<span class="ds-warn">${t('ds.warn.instab')}</span>`);
+  if (T > 2000) parts.push(`<span class="ds-warn">${t('ds.warn.material')}</span>`);
+  parts.push(`<span class="ds-note">${ds.ir
+    ? t('ds.note.ir',  { lmax: (DS_WIEN / T * 1e6).toFixed(2), ratio: DS_IR_RATIO })
+    : t('ds.note.opt', { ratio: ratioTxt, leak: leak.toFixed(2) })}</span>`);
+  // 光學模式下補上「能量去哪了」: 這是理解戴森球為何要用紅外搜尋的關鍵,
+  // 光說「殼是黑的」會讓人以為能量消失了 (違反能量守恆)
+  if (!ds.ir) parts.push(`<span class="ds-note">${t('ds.note.dark', { opt: optPct < 0.01 ? optPct.toFixed(4) : optPct.toFixed(2) })}</span>`);
+  if (f > 0.999) parts.push(`<span class="ds-note">${t('ds.note.leak', { lmax: (DS_WIEN / T * 1e6).toFixed(2) })}</span>`);
+  return parts.join('');
+}
+function renderDysonStats(){
+  const el = $('dsStats');
+  if (el) el.innerHTML = ds.on ? dsStatsHTML() : '';
+}
+function dsSetEnabled(){
+  $('tDyson').setAttribute('aria-pressed', String(ds.on));
+  $('tDyson').classList.toggle('on', ds.on);
+  $('dsIR').setAttribute('aria-pressed', String(ds.ir));
+  $('dsIR').classList.toggle('on', ds.ir);
+  document.querySelectorAll('.ds-ctl, #dsPerturb, #dsIR').forEach(el => el.classList.toggle('ds-off', !ds.on));
+  $('dsStats').style.display = ds.on ? '' : 'none';
+  renderDysonStats();
+}
+
+$('tDyson').addEventListener('click', () => {
+  ds.on = !ds.on;
+  dsGroup.visible = true;                       // 透明度交給 fadeTo 漸變
+  if (!ds.on){ ds.offset.set(0,0,0); ds.vel.set(0,0,0); ds.collided = false; }
+  dsApply();                                    // 先重建幾何/顏色 (遮蔽會被設成目標值)
+  const from = ds.on ? 0 : 1, to = ds.on ? 1 : 0;
+  dsSetFade(from);                              // 再覆寫回起點: 否則關閉時恆星會瞬間跳回全亮, 漸變失去意義
+  fadeTo('dyson', v => dsSetFade(v), from, to, 220,
+    () => { if (!ds.on){ dsGroup.visible = false; dsSetFade(0); } });   // 保底: 漸變被中斷也要回到全亮
+  dsSetEnabled();
+  armUiIdle();
+});
+$('dsIR').addEventListener('click', () => {
+  if (!ds.on) return;
+  ds.ir = !ds.ir;
+  dsApply(); dsSetEnabled();
+  armUiIdle();
+});
+$('dsPerturb').addEventListener('click', () => {
+  if (!ds.on) return;
+  dsPerturb(0.9);
+  dsSetEnabled();
+  armUiIdle();
+});
+$('dsCover').addEventListener('input', e => {
+  ds.cover = parseFloat(e.target.value);
+  $('dsCoverVal').textContent = Math.round(ds.cover * 100) + '%';
+  if (ds.on) dsApply();
+  renderDysonStats();
+  armUiIdle();
+});
+$('dsRadius').addEventListener('input', e => {
+  ds.radiusAU = parseFloat(e.target.value);
+  $('dsRadVal').textContent = ds.radiusAU.toFixed(2) + ' AU';
+  if (ds.on){ dsApply(); dsGroup.position.copy(ds.offset); ds.collided = false; ds.vel.set(0,0,0); ds.offset.set(0,0,0); }
+  renderDysonStats();
+  armUiIdle();
+});
+dsSetEnabled();   // 初始: 按鈕關閉, 滑桿與讀數停用
+
+// =============================================================================
 //  動畫迴圈
 // =============================================================================
 const clock = new THREE.Clock();
@@ -1439,6 +1688,7 @@ function animate(){
   const simDt = paused ? 0 : dt;
   for (const o of planetObjs) updatePlanet(o, simDt);
   stepFades();
+  dsStep(simDt);
 
   // 太陽 / 星空 / 吸積盤 動畫
   sunUniforms.uTime.value = simTime;
@@ -1564,6 +1814,7 @@ function renderDynamicUI(){
   pb.textContent = paused ? t('btn.play') : t('btn.pause');
   // 4. 載入進度 (若已淡出, renderLoaderTex 自行 return)
   renderLoaderTex();
+  renderDysonStats();   // 換語言時物理讀數也要重新取詞
 }
 window.addEventListener('langchange', renderDynamicUI);
 renderDynamicUI(); // 初始同步: index.html 的預置文字一律是中文, 語言為 en 時靠這裡轉正

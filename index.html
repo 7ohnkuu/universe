@@ -86,6 +86,19 @@
   .hdr-btn[aria-pressed="true"] { opacity:1; background:rgba(124,196,255,.28); border-color:var(--accent); }
   .ui-hdr-btns { display:flex; gap:4px; flex:0 0 auto; align-items:center; }
   .hint { font-size:10.5px; opacity:.5; margin-top:10px; line-height:1.5; }
+  /* 戴森殼讀數: 字典字串以 \t 分隔標籤與數值, 在 JS 裡拆成 grid 的兩欄。
+     不可用 white-space:pre-line + \t: 瀏覽器會把每個 tab 壓成單一空格, 對不起來。 */
+  .ds-stats { font-size:10.5px; line-height:1.55; opacity:.75;
+    display:grid; grid-template-columns:auto 1fr; column-gap:8px; row-gap:3px;
+    margin-top:8px; padding-top:8px; border-top:1px dashed rgba(120,160,200,.16); }
+  .ds-stats:empty { display:none; }
+  .ds-l { opacity:.65; white-space:nowrap; }
+  .ds-v b { color:var(--accent); font-weight:600; font-variant-numeric:tabular-nums; }
+  .ds-full, .ds-note, .ds-warn { grid-column:1 / -1; }
+  .ds-note { margin-top:5px; opacity:.7; }
+  .ds-warn { color:#ffb3a0; opacity:.95; margin-top:5px; }
+  /* 滑桿未啟用時降對比, 避免看起來可操作 */
+  #ui .ds-off { opacity:.38; pointer-events:none; }
   /* 鍵盤對照表: 純桌面用, 觸控裝置看不到也不需要 (隱藏以免在窄屏堆出雜訊) */
   .keys { font-size:10px; opacity:.5; margin-top:7px; line-height:1.5; }
   @media (hover: none) and (pointer: coarse) { .keys { display:none; } }
@@ -223,6 +236,24 @@
       </div>
     </div>
 
+    <div class="grp">
+      <div class="grp-t" data-i18n="grp.dyson">戴森殼</div>
+      <div class="row btns">
+        <button id="tDyson" aria-pressed="false" data-i18n="btn.dyson">戴森殼</button>
+        <button id="dsIR" class="ds-off" aria-pressed="false" data-i18n="btn.dsIR">紅外偽色</button>
+        <button id="dsPerturb" class="ds-off" data-i18n="btn.dsPerturb">施加擾動</button>
+      </div>
+      <div class="row ds-ctl ds-off">
+        <label><span data-i18n="dyson.cover">覆蓋率</span> <b id="dsCoverVal">50%</b></label>
+        <input id="dsCover" type="range" min="0" max="1" step="0.01" value="0.5" />
+      </div>
+      <div class="row ds-ctl ds-off">
+        <label><span data-i18n="dyson.radius">殼半徑</span> <b id="dsRadVal">0.30 AU</b></label>
+        <input id="dsRadius" type="range" min="0.15" max="0.5" step="0.01" value="0.3" />
+      </div>
+      <div class="ds-stats" id="dsStats"></div>
+    </div>
+
     <div class="hint" data-i18n-html="ui.hint">
       拖曳旋轉 · 滾輪縮放 · 右鍵平移 (觸控: 單指旋轉 · 雙指縮放/平移)。<br/>
       <b>點擊行星 / 太陽 / 黑洞</b>可自動飛行靠近並持續追蹤。<br/>
@@ -230,7 +261,7 @@
     </div>
     <!-- 快捷鍵說明必須是 .hint 的兄弟節點而非子節: .hint 用 data-i18n-html,
          applyStatic() 對它是 innerHTML = , 任何子節點都會被換語言時清掉 (與圖例同理) -->
-    <div class="keys" data-i18n="ui.keys">鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡</div>
+    <div class="keys" data-i18n="ui.keys">鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼</div>
   </div>
 
   <div class="legend-wrap">

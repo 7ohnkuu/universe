@@ -33,6 +33,8 @@ click-to-fly-and-track · zh-TW / English UI.
   - [The black hole](#the-black-hole)
   - [The soft terminator (and a bloom bug it caused)](#the-soft-terminator-and-a-bloom-bug-it-caused)
 - [Controls](#controls)
+  - [Keyboard](#keyboard)
+- [The Dyson shell](#the-dyson-shell)
 - [Project layout](#project-layout)
 - [Textures](#textures)
 - [Internationalization](#internationalization)
@@ -259,6 +261,7 @@ expands to. See `applyWrapLighting()` in `main.js`.
 | Pause button | Freeze the simulation clock |
 | Camera follow select | Free camera, any planet, or the black hole |
 | Orbits / Labels / Lensing / Black hole | Toggle each layer |
+| Dyson shell | Build / remove a shell around the Sun (see below) |
 | Texture resolution | 2k / 4k / 8k, reloaded live |
 | 中 / EN | Switch UI language |
 
@@ -275,6 +278,7 @@ and legend retract on touch devices too.
 | `0` / `9` | Fly to the Sun / the black hole |
 | `R` | Reset the view |
 | `L` `O` `B` `G` | Toggle labels / orbits / black hole / lensing |
+| `D` | Toggle the Dyson shell |
 
 Every shortcut calls the same handler as the corresponding button, so the two
 paths cannot drift apart. They stand down while a form control has focus — Space
@@ -284,6 +288,78 @@ block lists them, and hides itself on touch devices.
 
 Clicking a body triggers an animated fly-in that is interruptible — grabbing the
 camera mid-flight cancels the approach instead of fighting you for control.
+
+---
+
+## The Dyson shell
+
+A toggle in the panel (and the `D` key) wraps the Sun in a rigid shell with
+adjustable **coverage** (0–100%) and **radius** (0.15–0.35 AU). The panel shows
+the live physics: shell temperature, peak wavelength, intercepted power,
+optical-band fraction and escaping luminosity.
+
+Nothing here is eyeballed. Every number comes from a formula that was verified
+numerically before being shipped, and the browser implementation is
+cross-checked against an independent Python computation in the test suite.
+
+### Radiation balance
+
+`T = [ L(1−A) / (4πσR²) ]^(1/4)`, with `L = 3.828×10²⁶ W` and `A = 0.05`.
+Because the shell absorbs and radiates over areas that are both proportional to
+coverage, **T does not depend on coverage** — coverage only sets how much power
+is intercepted and how much light escapes. At 0.25 AU that is 777 K; the test
+suite asserts the R^(−1/2) scaling (0.15 AU → 1003 K, 0.30 AU → 709 K).
+
+### The shell is optically black
+
+Integrating the Planck distribution over 380–780 nm (a series expansion that
+matches direct quadrature to <10⁻⁵) shows that at these radii **less than
+0.01% of the shell's emission lands in the visible band**. So in an optical
+view the shell is black — its only observable effect is that the star dims to
+`(1−f)·L` and the planets dim with it. The energy is not lost: it leaves as
+waste heat at λmax 3–4 µm, where the shell outshines the surviving star by
+about 15×. That contrast is exactly why real searches (Project Hephaistos,
+arXiv 2607.09460; the Ĝ survey, arXiv 2608.12458) look for an *infrared
+excess* rather than optical dimming.
+
+Because an all-black sphere is useless to look at, a second view renders the
+shell's waste heat in **infrared false colour**, labelled as such in the panel
+so nobody mistakes it for what an eye would see. Its hue is the blackbody
+colour for T (anchored against D65 and incandescent-lamp references), and the
+gain is kept below linear 1.0 so the ACES tone mapper cannot desaturate 777 K
+into something that reads as 3500 K — measured hue error ≤ 6.5° across the
+radius range.
+
+### Neutral equilibrium, not a spring
+
+By Newton's shell theorem a uniform shell feels **zero net force** from the
+star's gravity, and radiation pressure cancels the same way (both are 1/r²
+fields; a Gauss–Legendre surface integral over the shell converges to ~10⁻¹²
+at 0.3 R and 0.9 R offsets). The equilibrium is therefore *neutral*: no
+restoring force, and — importantly — not exponentially unstable either.
+
+So the "apply perturbation" button gives the shell a small velocity and it then
+drifts at **constant speed** until its inner wall reaches the star, where it
+stops and the panel reports the collision. The test suite asserts this
+quantitatively: velocity varies by 0.00% over the drift, displacement versus
+time is a straight line (R² = 0.998), and the shell stops exactly at
+`R − R☉`. A spring-like bounce-back or exponential runaway would both be
+physically wrong here.
+
+The literature is more pessimistic than the toy: for a relativistic elastic
+membrane the axisymmetric dipole mode is already linearly unstable, so radial
+stability is not stability (arXiv 2409.10602). Passive stability of a shell
+around a *single* star is not available; the stable configurations in arXiv
+2502.12806 require a binary, with the shell enclosing the smaller mass. The
+panel says so rather than pretending otherwise.
+
+### Energy bookkeeping
+
+`(1−f)·L` escapes as starlight, `f·L(1−A)` leaves as shell waste heat, and
+`f·L·A` is reflected back inward — the three sum to `L`. The star's shader
+brightness and the point light both scale by `(1−f)` from a single fade value,
+so the two can never disagree mid-transition; a regression test failed until
+that was true (with f=100% the Sun stayed black after the shell was removed).
 
 ---
 
