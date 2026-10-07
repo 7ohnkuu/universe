@@ -467,7 +467,14 @@ the test suite:
 - **One Einstein ring, scaling as θ³.** Substituting `α ∝ 1/θ²` into the lens
   equation gives `θ³ = const`, unlike the black hole's `θ²` — the geometric
   diagnostic used to tell the two apart (arXiv 2607.02889). The pass draws a
-  single thin ring at 1.55× the throat radius and no photon ring.
+  single thin ring at 1.55× the throat radius.
+- **A photon ring exists, but is sub-pixel.** The Ellis throat *does* have an
+  unstable photon ring at `l = 0`: skimming rays loop around it arbitrarily many
+  times (`α ≈ −0.99·ln(b/a − 1)`, verified by direct integration of the null
+  geodesics). But the relativistic images converge at `e^(−2π/ā) ≈ 1.8×10⁻³`
+  per ring — even with the throat drawn at 1000 px radius the first one sits
+  0.65 px out — so they are physically real yet visually unresolvable, and the
+  pass does not attempt to draw them.
 - **The throat needs negative energy.** Keeping it open violates the null
   energy condition; the panel states this plainly instead of pretending the
   object is buildable.

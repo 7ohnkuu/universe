@@ -64,7 +64,7 @@
       'opt.comet': '彗星',
       'label.comet': '彗星 (雙尾)',
       'label.wh': '蟲洞 (Ellis–Bronnikov)',
-      'ds.note.wh': '★ 蟲洞無事件視界、無光子球、無陰影: b≤a 的光線穿喉而過, 喉是一個透視窗。偏折 α=(π/4)(a/b)² 無 1/b 項 ⇒ 零 ADM 質量; 愛因斯坦環 θ³=常數, 與黑洞的 θ² 不同 (arXiv 2607.02889)。撐開喉需要負能量 (違反零能量條件), 目前僅為理論構想。',
+      'ds.note.wh': '★ 蟲洞無事件視界、無陰影: b≤a 的光線穿喉而過, 喉是一個透視窗。偏折 α=(π/4)(a/b)² 無 1/b 項 ⇒ 零 ADM 質量; 愛因斯坦環 θ³=常數, 與黑洞的 θ² 不同 (arXiv 2607.02889)。喉緣另有不穩定光子環 (擦過的光繞行多圈), 但其次級影像逐環以 ~1.8×10⁻³ 收斂、次像素而不可見。撐開喉需要負能量 (違反零能量條件), 目前僅為理論構想。',
 
       'grp.dyson': '戴森結構',
       'btn.dyson': '啟用結構',
@@ -167,7 +167,7 @@
       'opt.comet': 'Comet',
       'label.comet': 'Comet (two tails)',
       'label.wh': 'Wormhole (Ellis–Bronnikov)',
-      'ds.note.wh': '★ No event horizon, no photon sphere, no shadow: rays with b≤a pass through the throat, so the throat is a window, not a black disc. Deflection α=(π/4)(a/b)² has no 1/b term ⇒ zero ADM mass; the Einstein ring scales as θ³=const, unlike the black hole’s θ² (arXiv 2607.02889). Keeping the throat open needs negative energy (violates the null energy condition) — a theoretical construct only.',
+      'ds.note.wh': '★ No event horizon, no shadow: rays with b≤a pass through the throat, so the throat is a window, not a black disc. Deflection α=(π/4)(a/b)² has no 1/b term ⇒ zero ADM mass; the Einstein ring scales as θ³=const, unlike the black hole’s θ² (arXiv 2607.02889). The throat does have an unstable photon ring (skimming rays loop many times), but its relativistic images converge at ~1.8×10⁻³ per ring and are sub-pixel, hence invisible. Keeping the throat open needs negative energy (violates the null energy condition) — a theoretical construct only.',
 
       'grp.dyson': 'DYSON STRUCTURE',
       'btn.dyson': 'Enable structure',
