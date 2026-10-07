@@ -623,17 +623,33 @@ function normalFromHeight(img, strength){
 
 // 大氣層 (菲涅爾邊緣輝光, BackSide 加法混合; 向陽側亮, 背陽側暗)
 const atmoMats = []; // { mat, obj } — 每幀更新 uSunDirView
-function addAtmosphere(radius, color, power, ownerObj){
+// 雙波長瑞利散射 (Rayleigh): 大氣散射截面 ∝ λ^-4, 故藍光散射最強 (白天邊緣藍)。
+// 當太陽接近地平線 (從大氣某點看), 光穿過的【空氣質量】(air mass) 變長,
+// 藍光被散射殆盡, 剩下的直射光偏紅橘 —— 這就是日落時 limb 轉橘紅的原因。
+// uRayTau=0 退回單色 fresnel (舊行為); >0 啟用色相位移。以「正規化到峰值 1」的
+// 穿透率 T 乘 glow => 純色相位移, 亮度不減 (真實日落是亮的橘色, 不是暗紅色)。
+//   T = exp(-tau·(am-1)·k),  k=(0.513,1.0,2.232) 為 650/550/450nm 的 λ^-4 (綠正規化)
+//   am = 1/max(mu,0.10),  mu = cos(太陽天頂角) = dot(N, sunDir)
+function addAtmosphere(radius, color, power, ownerObj, rayTau){
   const mat = new THREE.ShaderMaterial({
     transparent:true, side:THREE.BackSide, depthWrite:false, blending:THREE.AdditiveBlending,
-    uniforms:{ glow:{ value:new THREE.Color(color) }, uPow:{ value: power }, uSunDirView:{ value:new THREE.Vector3(0,0,1) } },
+    uniforms:{ glow:{ value:new THREE.Color(color) }, uPow:{ value: power }, uSunDirView:{ value:new THREE.Vector3(0,0,1) }, uRayTau:{ value: rayTau||0 } },
     vertexShader:`varying vec3 vN; varying vec3 vV;
       void main(){ vN=normalize(normalMatrix*normal); vec4 mv=modelViewMatrix*vec4(position,1.0); vV=normalize(-mv.xyz); gl_Position=projectionMatrix*mv; }`,
-    fragmentShader:`varying vec3 vN; varying vec3 vV; uniform vec3 glow; uniform float uPow; uniform vec3 uSunDirView;
+    fragmentShader:`varying vec3 vN; varying vec3 vV; uniform vec3 glow; uniform float uPow; uniform vec3 uSunDirView; uniform float uRayTau;
       void main(){
-        float f=pow(clamp(1.0-abs(dot(vN,vV)),0.0,1.0),uPow); // BackSide 無自動法線翻轉, 用 abs 取掠射角; clamp 防插值誤差致負底數
-        float day=0.15+0.85*max(dot(normalize(vN), normalize(uSunDirView)),0.0);
-        gl_FragColor=vec4(glow*f*day, f*0.9*day);
+        vec3 n = normalize(vN); vec3 s = normalize(uSunDirView);
+        float f=pow(clamp(1.0-abs(dot(n,vV)),0.0,1.0),uPow); // BackSide 無自動法線翻轉, 用 abs 取掠射角; clamp 防插值誤差致負底數
+        float mu=dot(n,s);                                    // cos(太陽天頂角): 兩向量皆視空間 => 點積與座標框架無關
+        float day=0.15+0.85*max(mu,0.0);
+        vec3 col=glow;
+        if(uRayTau>0.0){
+          float am=1.0/max(mu,0.10);                          // 空氣質量 (掠射時趨大)
+          vec3 T=exp(-uRayTau*(am-1.0)*vec3(0.513,1.0,2.232)); // λ^-4 消光
+          float mx=max(max(T.r,T.g),T.b);
+          col=glow*(T/max(mx,1e-4));                          // 正規化峰值 => 純色相位移, 亮度不減
+        }
+        gl_FragColor=vec4(col*f*day, f*0.9*day);
       }`,
   });
   atmoMats.push({ mat, obj: ownerObj });
@@ -1310,12 +1326,14 @@ PLANETS.forEach((p, idx) => {
     );
     obj.add(clouds); p._clouds = clouds;
     clouds.castShadow = true; // alphaTest>0 -> r160 自動以 map/alphaMap 生成 distance 變體, 雲影不再是實心球
-    atmoParent.add(addAtmosphere(p.rDisp * 1.03, 0x3a7bd5, 2.5, atmoParent));
+    // 地球: 氮氧大氣, 強瑞利散射 (tau=0.9) => 日落時 limb 自然轉橘紅
+    atmoParent.add(addAtmosphere(p.rDisp * 1.03, 0x3a7bd5, 2.5, atmoParent, 0.9));
     // 夜面閃電: 掛在雲層 (隨雲自轉) 上, sprite 池循環重用
     p._lightning = makeLightning(clouds, p.rDisp * 1.012);
     earthLightning = p._lightning;
   } else if (p.name === '金星') {
-    atmoParent.add(addAtmosphere(p.rDisp * 1.05, 0xd9b06a, 2.5, atmoParent));
+    // 金星: 極厚 CO2 大氣, 瑞利散射更強; 基底已偏黃, tau=0.7 把掠射 limb 推向橘紅
+    atmoParent.add(addAtmosphere(p.rDisp * 1.05, 0xd9b06a, 2.5, atmoParent, 0.7));
   } else if (p.name === '火星') {
     atmoParent.add(addAtmosphere(p.rDisp * 1.02, 0xd88a5a, 3.5, atmoParent));
   } else if (p.name === '木星') {
