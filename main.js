@@ -316,6 +316,72 @@ const WRAP_DECL   = 'float dotNLwrap = pow( saturate( ( dot( geometryNormal, dir
 const DIFFUSE_NEEDLE = 'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );';
 const DIFFUSE_PATCH  = 'reflectedLight.directDiffuse += dotNLwrap * directLight.color * BRDF_Lambert( material.diffuseColor );';
 const WRAP_MARKER = '#include <lights_physical_pars_fragment>';
+// 解析式環影: 薄環在立方陰影圖 (1024²) 中只佔幾個 texel, PCF 救不回 ——
+// 環投在球面的影子會變成鋸齒黑帶。改以解析解: 表面點→太陽射線與環面
+// (赤道面, 即物件空間 y=0) 求交, 以交點半徑取環貼圖 alpha 衰減直射光。
+// 與解析度無關、零鋸齒; 環縫 (卡西尼縫) 自然透出亮光。
+const RS_VS_DECL   = 'varying vec3 vObjPosRS;';
+const RS_VS_SET    = 'vObjPosRS = position;';
+const RS_VS_MARKER = '#include <project_vertex>';
+const RS_FS_HEAD = `
+uniform sampler2D uRingTex;
+uniform vec2  uRingRad;   // 環內/外半徑 (物件空間)
+uniform vec3  uSunObj;    // 太陽位置 (物件空間)
+uniform float uRingOn;    // 環貼圖就緒與否 (程序化降級環無 alpha, 不投影)
+varying vec3 vObjPosRS;
+float ringShadowFactor(){
+  if ( uRingOn < 0.5 ) return 1.0;
+  vec3 L = normalize( uSunObj - vObjPosRS );
+  if ( abs( L.y ) < 1e-4 ) return 1.0;      // 射線平行環面: 無影
+  float t = -vObjPosRS.y / L.y;             // 與 y=0 平面交點參數
+  if ( t <= 0.0 ) return 1.0;               // 交點在表面點後方: 無影
+  vec2 q = vObjPosRS.xz + L.xz * t;
+  float r = length( q );
+  if ( r < uRingRad.x || r > uRingRad.y ) return 1.0;
+  float u0 = ( r - uRingRad.x ) / ( uRingRad.y - uRingRad.x );
+  float du = 0.12 / ( uRingRad.y - uRingRad.x );   // ~0.12 單位徑向模糊 = 半影軟邊
+  float a = ( texture2D( uRingTex, vec2(u0-du,0.5) ).a
+            + texture2D( uRingTex, vec2(u0,0.5) ).a
+            + texture2D( uRingTex, vec2(u0+du,0.5) ).a ) / 3.0;
+  return 1.0 - 0.85 * a;                    // 環非全不透明, 保留 15% 透光
+}`;
+const RS_LFB_MARKER = '#include <lights_fragment_begin>';
+const RS_LIGHT_NEEDLE = 'getPointLightInfo( pointLight, geometryPosition, directLight );';
+const RS_LIGHT_PATCH  = RS_LIGHT_NEEDLE + '\n\t\tdirectLight.color *= ringShadowFactor();';
+function applyRingShadow(mat, p, obj){
+  const inner = p.rDisp * 1.3, outer = p.rDisp * 2.4;
+  p._rsU = {
+    tex: { value: null },
+    rad: { value: new THREE.Vector2(inner, outer) },
+    sun: { value: new THREE.Vector3() },
+    on:  { value: 0 },
+  };
+  p._rsQinv = obj.quaternion.clone().invert();   // 世界→物件空間 (軸傾為常數)
+  const prevCompile = mat.onBeforeCompile;         // 串接 wrap lighting 的 patch, 不可覆寫
+  const prevKey = mat.customProgramCacheKey;
+  mat.onBeforeCompile = shader => {
+    if (prevCompile) prevCompile(shader);
+    shader.uniforms.uRingTex = p._rsU.tex;
+    shader.uniforms.uRingRad = p._rsU.rad;
+    shader.uniforms.uSunObj  = p._rsU.sun;
+    shader.uniforms.uRingOn  = p._rsU.on;
+    if (!shader.vertexShader.includes(RS_VS_MARKER)){
+      console.warn(t('err.patchInclude'));
+    } else {
+      shader.vertexShader = RS_VS_DECL + '\n' + shader.vertexShader
+        .replace(RS_VS_MARKER, RS_VS_MARKER + '\n\t' + RS_VS_SET);
+    }
+    if (!shader.fragmentShader.includes(RS_LFB_MARKER)
+        || !THREE.ShaderChunk.lights_fragment_begin.includes(RS_LIGHT_NEEDLE)){
+      console.warn(t('err.patchDiffuse'));
+    } else {
+      shader.fragmentShader = RS_FS_HEAD + '\n' + shader.fragmentShader
+        .replace(RS_LFB_MARKER,
+          THREE.ShaderChunk.lights_fragment_begin.replace(RS_LIGHT_NEEDLE, RS_LIGHT_PATCH));
+    }
+  };
+  mat.customProgramCacheKey = () => (prevKey ? prevKey() : '') + '+ringshadow';
+}
 function applyWrapLighting(mat, wrap, extraPatch){
   mat.onBeforeCompile = shader => {
     shader.uniforms.uWrap = { value: wrap };
@@ -766,7 +832,8 @@ async function upgradeRing(ring, gen){
     depthWrite: false, roughness: 1, metalness: 0, envMapIntensity: 0.2, alphaTest: 0.12 });
   // alphaTest>0 讓 r160 自動複製 map+alphaTest 成 distance-material 變體 -> 環縫有真實透明陰影
   if (old){ if (old.map) old.map.dispose(); old.dispose(); }
-  ring.castShadow = true;
+  ring.castShadow = false;   // 環影改由行星 shader 解析計算 (shadow map 對薄環會鋸齒)
+  ring.userData.ringTex = t; // 供行星 shader 取樣 alpha
   ring.receiveShadow = true;
   ring.userData.texUrl = url;
 }
@@ -972,6 +1039,7 @@ PLANETS.forEach((p, idx) => {
     : new THREE.MeshStandardMaterial(matParams);
   const wrapV = (p.type === 'gas' || p.type === 'ice') ? 0.2 : p.name === '地球' ? 0.12 : 0.08;
   applyWrapLighting(mat, wrapV, p.name === '地球' ? injectNightLights : null);
+  if (p.ring) applyRingShadow(mat, p, obj);   // 土星: 解析式環影 (取代鋸齒 shadow map)
   mat.envMapIntensity = (p.type === 'gas' || p.type === 'ice') ? 0.25 : p.name === '地球' ? 0.35 : 0.15;
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(p.rDisp, 64, 64), mat);
   mesh.castShadow = true; mesh.receiveShadow = true;
@@ -2435,6 +2503,12 @@ function updatePlanet(o, dt){
   const yv = p.aDisp * Math.sqrt(1 - p.e*p.e) * Math.sin(E);
   const v = new THREE.Vector3(xv, yv, 0).applyMatrix4(o.orbitBase);
   o.obj.position.copy(v);
+  if (p._rsU){                                   // 解析式環影: 每幀更新太陽的物件空間位置
+    p._rsU.sun.value.copy(v).negate().applyQuaternion(p._rsQinv);
+    const tex = (o.ring && o.ring.userData.ringTex) || null;
+    const on = tex ? 1 : 0;
+    if (p._rsU.on.value !== on){ p._rsU.on.value = on; p._rsU.tex.value = tex; }
+  }
   // 自轉: 真實週期比, 但視覺上限速。0.2 年/秒 × 365 轉/年 = 73 轉/秒,
   // 遠超畫面更新率 -> 紋理閃爍。以 dt 積分並鉗制在 0.8 轉/秒以內 (保留逆行符號)。
   const spinYr = p.spinHr / (24 * 365.25);
