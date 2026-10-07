@@ -45,6 +45,7 @@
 
       'btn.orbits': '軌道線',
       'btn.labels': '名稱',
+      'btn.belt': '小行星帶',
       'btn.lens': '引力透鏡',
       'btn.bh': '黑洞',
       'btn.wh': '蟲洞',
@@ -136,6 +137,7 @@
 
       'btn.orbits': 'Orbits',
       'btn.labels': 'Labels',
+      'btn.belt': 'Asteroid belt',
       'btn.lens': 'Lensing',
       'btn.bh': 'Black hole',
       'btn.wh': 'Wormhole',

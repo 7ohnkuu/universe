@@ -1582,6 +1582,181 @@ function cometStep(){
   COMET.group.children[3].quaternion.copy(_drQ2);   // children[3] = 塵尾 (0核 1彗髮 2離子 3塵)
 }
 
+// =============================================================================
+//  小行星帶 + 古柏帶 (GPU 粒子場)
+//
+//  為什麼用 gl.POINTS 而不是 InstancedMesh:
+//    帶內每顆天體在畫面上都是次像素點, 幾何細節完全浪費; Points 一顆一個
+//    頂點, 比 instancing 省一個數量級的記憶體與頻寬。位置【全部在頂點著色器
+//    內以克卜勒方程即時求解】, CPU 每幀只寫一個 uTime —— 零 per-particle CPU 成本。
+//
+//  真實物理:
+//    · 半主軸分佈不是均勻的, 而是按真實直方圖: 主帶峰值 ~2.7–3.0 AU, 並在
+//      木星平均運動共振處鑿出【柯克伍德空隙】(Kirkwood gaps):
+//        3:1 @ 2.50 AU · 5:2 @ 2.83 AU · 7:3 @ 2.96 AU · 2:1 @ 3.28 AU
+//      共振位置 a = a_J (q/p)^(2/3) (克卜勒第三定律), 已在 Python 側數值確認。
+//      另含 Cybele (3.4) 與 Hilda 3:2 (3.97) 兩個真實族群峰。
+//    · 古柏帶: 30–50 AU, 含 Plutino 2:3 共振峰 @ 39.4 AU (冥王星正在此) 與
+//      1:2 @ 47.8 AU, 50 AU 後密度驟降 (Kuiper cliff)。
+//    · 每顆有自己的 e / 傾角 / 三個定向角 / 相位 ⇒ 差速旋轉 (內快外慢),
+//      這正是「帶」而非「剛性環」的視覺特徵。
+//
+//  亮度壓在 bloom threshold(2.0) 以下 (與星點同一戒律): 附加混合 + 低 alpha,
+//    密帶重疊累積成霧狀環帶, 單顆仍很暗, 不會被 UnrealBloomPass 燒成方塊。
+// =============================================================================
+const beltMats = [];                 // 兩條帶的材質 (共用 uTime/uOpacity 語意, 分別 fade)
+let beltOn = true, beltGroup = null;
+const BELT_RNG = () => { let s = 0x2f6e2b1 >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; };
+const _beltQ = new THREE.Quaternion(), _beltM4 = new THREE.Matrix4(),
+      _beltRz1 = new THREE.Matrix4(), _beltRx = new THREE.Matrix4(), _beltRz2 = new THREE.Matrix4();
+const smoothB = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+// 主帶密度 (含柯克伍德空隙)。a: AU。回傳相對密度 (未正規化)。
+function beltDensityMain(a){
+  let d;
+  if (a < 2.06) d = 0.12 * smoothB(1.78, 2.06, a);          // 內緣急升 (Hungaria 稀少)
+  else d = Math.exp(-0.5 * Math.pow((a - 2.72) / 0.40, 2));  // 主帶高斯
+  d += 0.28 * Math.exp(-0.5 * Math.pow((a - 3.40) / 0.07, 2));  // Cybele
+  d += 0.30 * Math.exp(-0.5 * Math.pow((a - 3.97) / 0.09, 2));  // Hilda 3:2
+  // 柯克伍德空隙: 共振位置挖掉 (深度 depth, 寬度 w)
+  const gaps = [[2.0652,0.025,0.75],[2.5018,0.022,0.95],[2.8252,0.016,0.85],
+                [2.9581,0.014,0.80],[3.2783,0.022,0.92]];
+  for (const [ga, w, dp] of gaps) d *= 1 - dp * Math.exp(-0.5 * Math.pow((a - ga) / w, 2));
+  if (a > 3.3 && a < 3.7) d *= 0.35;                        // 主帶與 Hilda 之間的空缺
+  return Math.max(0, d);
+}
+// 古柏帶密度: 冷古典族群 + Plutino 2:3 + 1:2 共振, 50 AU 後驟降。
+function beltDensityKuiper(a){
+  let d = 0.55 * Math.exp(-0.5 * Math.pow((a - 43.5) / 3.2, 2));   // 冷古典主體
+  d += 0.9 * Math.exp(-0.5 * Math.pow((a - 39.4) / 0.5, 2));       // Plutino 2:3 (冥王星)
+  d += 0.5 * Math.exp(-0.5 * Math.pow((a - 47.8) / 0.6, 2));       // 1:2 共振
+  d *= smoothB(30.0, 32.0, a) * (1 - smoothB(48.0, 51.0, a));      // 內外緣
+  return Math.max(0, d);
+}
+function sampleA(rng, densFn, amin, amax, maxD){
+  for (let i = 0; i < 400; i++){
+    const a = amin + rng() * (amax - amin);
+    if (rng() < densFn(a) / maxD) return a;
+  }
+  return amin + rng() * (amax - amin);   // 保底 (理論上到不了)
+}
+function maxDensity(densFn, amin, amax){
+  let mx = 0;
+  for (let i = 0; i <= 2000; i++) mx = Math.max(mx, densFn(amin + (amax - amin) * i / 2000));
+  return mx;
+}
+// 依軌道要素產生一條帶的幾何 + 材質。cfg: {N, densFn, amin, amax, eMean, inclDeg, colorFn, sizeMin/Max}
+function buildBelt(cfg){
+  const rng = BELT_RNG();
+  const N = cfg.N;
+  const maxD = maxDensity(cfg.densFn, cfg.amin, cfg.amax);
+  // position 只是 three 需要的佔位屬性 (真實位置在著色器內算);
+  // 故必須手動設 boundingSphere 涵蓋整條帶, 否則 three 以 position 算出半徑 0
+  // 的包圍球 -> 原點不在視野時整條帶被錯誤剔除。
+  const pos = new Float32Array(N * 3);                 // 全 0
+  const aE = new Float32Array(N), eE = new Float32Array(N);
+  const nE = new Float32Array(N), mE = new Float32Array(N);
+  const qE = new Float32Array(N * 4), cE = new Float32Array(N * 3), sE = new Float32Array(N);
+  const gauss = () => { let u = 0, v = 0; while (u === 0) u = rng(); while (v === 0) v = rng();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(TWO_PI * v); };
+  let maxSceneR = 0;
+  for (let i = 0; i < N; i++){
+    const aAU = sampleA(rng, cfg.densFn, cfg.amin, cfg.amax, maxD);
+    const aS = distScale(aAU);
+    maxSceneR = Math.max(maxSceneR, aS * 1.3);
+    const e = Math.min(0.42, Math.max(0, Math.abs(gauss()) * cfg.eMean));
+    const incl = Math.min(cfg.inclDeg, Math.abs(gauss()) * cfg.inclDeg * 0.45) * DEG;
+    const node = rng() * TWO_PI, peri = rng() * TWO_PI;
+    aE[i] = aS; eE[i] = e;
+    nE[i] = TWO_PI / Math.pow(aAU, 1.5);              // 平均運動 = 2π / 週期(年), 週期 = a^1.5
+    mE[i] = rng() * TWO_PI;
+    // 定向: Rz(node)·Rx(incl)·Rz(peri), 與行星 orbitBase 同一慣例 -> 轉成四元數存
+    _beltRz1.makeRotationZ(peri); _beltRx.makeRotationX(incl); _beltRz2.makeRotationZ(node);
+    _beltM4.multiplyMatrices(_beltRz2, _beltRx); _beltM4.multiply(_beltRz1);
+    _beltQ.setFromRotationMatrix(_beltM4);
+    qE[i*4] = _beltQ.x; qE[i*4+1] = _beltQ.y; qE[i*4+2] = _beltQ.z; qE[i*4+3] = _beltQ.w;
+    const col = cfg.colorFn(aAU, rng);
+    cE[i*3] = col[0]; cE[i*3+1] = col[1]; cE[i*3+2] = col[2];
+    sE[i] = cfg.sizeMin + rng() * (cfg.sizeMax - cfg.sizeMin);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aElem', new THREE.BufferAttribute(aE, 1));
+  g.setAttribute('eElem', new THREE.BufferAttribute(eE, 1));
+  g.setAttribute('nElem', new THREE.BufferAttribute(nE, 1));
+  g.setAttribute('mElem', new THREE.BufferAttribute(mE, 1));
+  g.setAttribute('qElem', new THREE.BufferAttribute(qE, 4));
+  g.setAttribute('cElem', new THREE.BufferAttribute(cE, 3));
+  g.setAttribute('sElem', new THREE.BufferAttribute(sE, 1));
+  // 著色器內算位置 -> three 無從得知真實範圍, 手動給涵蓋整條帶的包圍球
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), maxSceneR);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uPixel: { value: renderer.getPixelRatio() }, uOpacity: { value: 1 } },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `
+      attribute float aElem, eElem, nElem, mElem, sElem;
+      attribute vec4 qElem; attribute vec3 cElem;
+      uniform float uTime, uPixel; varying vec3 vCol;
+      float solveKepler(float M, float e){
+        float E = M;
+        for (int i = 0; i < 4; i++){ float f = E - e*sin(E) - M; E -= f / (1.0 - e*cos(E)); }
+        return E;
+      }
+      vec3 qrot(vec4 q, vec3 v){ return v + 2.0*cross(q.xyz, cross(q.xyz, v) + q.w*v); }
+      void main(){
+        float M = mElem + nElem * uTime;
+        float E = solveKepler(M, eElem);
+        float xv = aElem * (cos(E) - eElem);
+        float yv = aElem * sqrt(1.0 - eElem*eElem) * sin(E);
+        vec3 p = qrot(qElem, vec3(xv, yv, 0.0));
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        vCol = cElem;
+        float sz = sElem * uPixel * (200.0 / max(-mv.z, 25.0));
+        gl_PointSize = clamp(sz, 0.7, 5.5);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      uniform float uOpacity; varying vec3 vCol;
+      void main(){
+        vec2 q = gl_PointCoord - 0.5; float d = length(q);
+        float a = smoothstep(0.5, 0.08, d);
+        gl_FragColor = vec4(vCol, a * uOpacity);
+      }`,
+  });
+  const pts = new THREE.Points(g, mat);
+  beltMats.push(mat);
+  return pts;
+}
+function buildBelts(){
+  beltGroup = new THREE.Group();
+  // 裝置分級: 行動/低核心數減半粒子, 保持流暢 (SwiftShader 軟體渲染下亦不至卡死)
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  const cores = navigator.hardwareConcurrency || 4;
+  const scale = (coarse || cores <= 4) ? 0.4 : 1.0;
+  // 主帶: C 型 (外, 暗碳質) -> S 型 (內, 較亮矽酸鹽) 的顏色梯度
+  const mainColor = (a, rng) => {
+    const tS = smoothB(2.5, 2.1, a);            // 越內越偏 S 型 (亮、偏紅褐)
+    const b = 0.16 + 0.20 * tS + rng() * 0.06;
+    return [b * (1.0 + 0.25 * tS), b * (0.95 + 0.05 * tS), b * (0.88 - 0.05 * tS)];
+  };
+  // 古柏帶: 冰冷, 略偏藍白, 稍亮
+  const kuiperColor = (a, rng) => {
+    const b = 0.20 + rng() * 0.10;
+    return [b * 0.86, b * 0.92, b * 1.05];
+  };
+  const main = buildBelt({ N: Math.round(46000 * scale), densFn: beltDensityMain, amin: 1.78, amax: 4.4,
+    eMean: 0.12, inclDeg: 16, colorFn: mainColor, sizeMin: 1.0, sizeMax: 2.4 });
+  const kuiper = buildBelt({ N: Math.round(30000 * scale), densFn: beltDensityKuiper, amin: 30, amax: 51,
+    eMean: 0.11, inclDeg: 26, colorFn: kuiperColor, sizeMin: 0.9, sizeMax: 2.0 });
+  beltGroup.add(main); beltGroup.add(kuiper);
+  ecliptic.add(beltGroup);
+  return { main, kuiper };
+}
+const BELTS = buildBelts();
+function beltStep(){
+  for (const m of beltMats) m.uniforms.uTime.value = simTime;   // 位置全在著色器內, CPU 只推進時間
+}
+
 // 引力透鏡 後處理著色器 (螢幕空間近似)
 const LensingShader = {
   uniforms: {
@@ -1976,6 +2151,16 @@ $('tOrbits').addEventListener('click', e => {
   if (showOrbits) planetObjs.forEach(o => o.orbitLine.visible = true);
   fadeTo('orbits', v => mats.forEach(m => m.opacity = v), cur, showOrbits ? ORBIT_OPACITY : 0, 180,
     () => { if (!showOrbits) planetObjs.forEach(o => o.orbitLine.visible = false); });
+});
+// 小行星帶/古柏帶: 與軌道線同一淡入淡出語彙。淡出完才 visible=false,
+// 否則漸變動畫看不見 (與黑洞/蟲洞同理)。
+$('tBelt').addEventListener('click', e => {
+  beltOn = !beltOn; e.target.classList.toggle('on', beltOn);
+  e.target.setAttribute('aria-pressed', String(beltOn));
+  const cur = beltMats[0].uniforms.uOpacity.value;
+  if (beltOn) beltGroup.visible = true;
+  fadeTo('belt', v => { for (const m of beltMats) m.uniforms.uOpacity.value = v; }, cur, beltOn ? 1 : 0, 180,
+    () => { if (!beltOn) beltGroup.visible = false; });
 });
 let labelsHideTimer = 0;
 $('tLabels').addEventListener('click', e => {
@@ -2649,6 +2834,7 @@ function animate(){
   stepFades();
   dsStep(simDt);
   cometStep();
+  beltStep();
 
   // 太陽 / 星空 / 吸積盤 動畫
   sunUniforms.uTime.value = simTime;
@@ -2787,6 +2973,7 @@ addEventListener('resize', () => {
   lensingPass.uniforms.aspect.value = innerWidth / innerHeight;
   whLensingPass.uniforms.aspect.value = innerWidth / innerHeight;
   starMat.uniforms.uPixel.value = renderer.getPixelRatio();
+  for (const m of beltMats) m.uniforms.uPixel.value = renderer.getPixelRatio();
 });
 
 // =============================================================================
