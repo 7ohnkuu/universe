@@ -94,6 +94,15 @@
     display:grid; grid-template-columns:auto 1fr; column-gap:8px; row-gap:3px;
     margin-top:8px; padding-top:8px; border-top:1px dashed rgba(120,160,200,.16); }
   .ds-stats:empty { display:none; }
+  /* 光變曲線摺疊區: 原生 <details>。summary 重用 .grp-t 的字體, 但需要指標與
+     三角指示; canvas 寬度撑滿面板 (高度由 JS 依 devicePixelRatio 設)。 */
+  #wlcBox summary { cursor:pointer; list-style:none; }
+  #wlcBox summary::-webkit-details-marker { display:none; }
+  #wlcBox summary::before { content:'▸ '; opacity:.7; }
+  #wlcBox[open] summary::before { content:'▾ '; }
+  #wlcBox summary:hover { opacity:.8; }
+  #wlcCanvas { width:100%; height:96px; display:block; margin-top:8px;
+    border:1px solid rgba(120,160,200,.18); border-radius:8px; }
   .ds-l { opacity:.65; white-space:nowrap; }
   .ds-v b { color:var(--accent); font-weight:600; font-variant-numeric:tabular-nums; }
   .ds-full, .ds-note, .ds-warn { grid-column:1 / -1; }
@@ -283,6 +292,16 @@
       </div>
       <div class="ds-stats" id="dsStats"></div>
     </div>
+
+    <!-- 蟲洞微透鏡光變曲線: 用原生 <details> 做可展開摺疊區 ——
+         預設收起不佔面板長度, 展開才描圖與跑物理 (WLC.on 控制, 收起時零每幀成本)。
+         details 原生支援鍵盤與螢幕閱讀器, 不需自訂 ARIA 狀態。 -->
+    <details class="grp" id="wlcBox">
+      <summary class="grp-t wlc-sum" data-i18n="grp.wlc">蟲洞光變曲線</summary>
+      <div class="wlc-note ds-note" data-i18n="wlc.intro">★ 蟲洞經過背景星時, 星的亮度隨時間變化。蟲洞的 A(u) 會跌破 1 (減光), 黑洞永遠 A≥1 —— 這是單一蟲洞曲線上就看得見的判準。</div>
+      <canvas id="wlcCanvas"></canvas>
+      <div class="ds-stats" id="wlcStats"></div>
+    </details>
 
     <div class="hint" data-i18n-html="ui.hint">
       拖曳旋轉 · 滾輪縮放 · 右鍵平移 (觸控: 單指旋轉 · 雙指縮放/平移)。<br/>

@@ -42,6 +42,7 @@ galilean/Saturnian moons · a **Pluto–Charon binary** orbiting a shared baryce
   - [Keyboard](#keyboard)
 - [The Dyson shell](#the-dyson-shell)
 - [The wormhole](#the-wormhole)
+  - [The microlensing light curve](#the-microlensing-light-curve)
 - [Moons, and a comet](#moons-and-a-comet)
 - [Pluto–Charon binary](#plutocharon-binary)
 - [Asteroid belt and Kuiper belt](#asteroid-belt-and-kuiper-belt)
@@ -485,6 +486,63 @@ folding the outer annulus back over the throat). The shipped mapping is
 continuous and bounded (`rr = a·(dist/a)^0.8` inside the throat, deflection
 clamped to half the gap outside), which removes them; the regression test
 compares lens-on versus lens-off pixels so a silent no-op pass would fail.
+
+### The microlensing light curve
+
+Expanding the **"Wormhole light curve"** disclosure in the panel turns on a real
+microlensing event. It stays collapsed by default, so the panel keeps its length
+and nothing is computed per frame until you open it. A background source star is placed behind the
+wormhole's orbital track, so as the wormhole sweeps past, the star's brightness
+changes and is plotted live against time. The star and the curve are driven by
+the *same* `A(t)`, so what you see brighten is what the curve shows.
+
+The deflection is **not** the weak-field `(π/4)(a/b)²` approximation — it is the
+exact closed form
+
+    α(b) = 2K(a²/b²) − π
+
+where `K` is the complete elliptic integral of the first kind, evaluated by AGM
+(ten iterations to machine precision). This matches direct numerical integration
+of the null geodesics to 0.0001%, reduces to `(π/4)(a/b)²` in the far field
+(ratio 1.000001 at b/a = 1000), and diverges logarithmically as b→a (the
+unstable photon ring). It is cheap enough (≈4 µs/call) to solve the lens
+equation and the magnification every frame, so no lookup table is needed.
+
+**The observatory is the camera**, not the scene origin. With the origin as
+observer the source star and wormhole sit 55° apart on screen at conjunction —
+the curve would say "conjunction" while the picture shows them on opposite
+sides. Using the camera means "what you see is what the curve plots"; the price
+is that θ_E (and hence ρ_g = b_E/a ≈ 2.8–3.4) drifts as the camera moves, which
+is exactly why the exact solver runs per-frame instead of a baked table.
+
+**The decisive feature is that the wormhole demagnifies.** The finite-source
+magnification (source radius ρ = 0.2 θ_E, so the peak is capped at ≈(4/3)/ρ
+rather than diverging) has:
+
+| | value |
+|---|---|
+| peak at conjunction (u=0) | A = 6.486 |
+| A=1 crossing | u ≈ 1.0 |
+| **minimum (demagnification)** | **A = 0.9533 at u ≈ 1.66 → 4.67% *below* unlensed** |
+| recovery | A → 1 by u ≈ 5 |
+
+A Schwarzschild point mass is **always A ≥ 1** and never dips below the
+baseline — so the dip is a wormhole signature visible on this *single* curve,
+with no need to overplot the black hole. (Every number above was cross-checked
+against an independent Python integration using the same AGM kernel; the two
+agree to better than 1e-4% pointwise.)
+
+Because the dip is only 4.7% deep while the peak is 6.5×, a single linear axis
+would render the dip sub-pixel (0.79 px on a 110 px plot). The canvas therefore
+draws two curves: the measured `A(t)` on the main axis, and the *same* trace on
+a zoomed `(A−1)×12` axis where the dip and the A=1 crossing are unmistakable.
+The star's on-screen brightness uses a log compression `1 + 0.30·ln(A)` so the
+peak never crosses the bloom threshold — otherwise the magnified star would
+blow into HDR squares, the very artefact this project already fixed once.
+
+The whole thing lives behind the disclosure, so it costs nothing per frame when
+collapsed, and it hides with the wormhole (`W`), when switching to TRAPPIST-1,
+or when labels are off.
 
 ## Moons, and a comet
 

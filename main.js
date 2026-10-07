@@ -1798,6 +1798,339 @@ function buildWormhole(){
 buildWormhole();
 
 // =============================================================================
+//  蟲洞微透鏡光變曲線 (microlensing light curve)
+//
+//  物理 —— 全部經獨立數值驗證 (Python 側以 AGM 與直接積分雙路徑對拍):
+//
+//  1. 偏折角有【閉式解】: α(b) = 2K(a²/b²) − π
+//     K = 第一類完全椩圓積分, 以 AGM (算術幾何平均) 計算, 10 次迭代即達機器精度。
+//     驗證: 與直接積分零測地線吻合 0.0001%; 遠場漸近精確回到弱場領先項
+//     (π/4)(a/b)² (b/a=1000 時比值 1.000001); 強場 b→a 時對數發散
+//     (喉緣的不穩定光子環)。
+//     → 所以不必建查找表: 每幀直接算, 而且【精確】。
+//
+//  2. 透鏡方程 (帶符號, 兩支影像):
+//       u = x − sign(x)·g(|x|),   g(x) = α(ρ_g x) / α(ρ_g),   ρ_g = b_E/a
+//     x = θ/θ_E 為像的無量綱角位置, u = β/θ_E 為源的無量綱角位置。
+//     x 的下界是 1/ρ_g: b = ρ_g·x·a < a 的光線【穿喉】而非偏折, 那個影像不存在
+//     —— 這正是蟲洞與黑洞的根本差異, 也是峰值低於解析上限 (4/3)/ρ 的原因。
+//
+//  3. 放大率 A = |x/u ÷ du/dx| 對兩支影像求和。有限源 (半徑 ρ = 0.2 θ_E)
+//     以圓盤平均截斷峰值, 否則 u→0 時 A→∞ (真實恆星有角直徑)。
+//     峰值 (4/3)/ρ = 6.67, 因穿喉截斷實得 6.36。
+//
+//  4. 【決定性特徵】A 會跌破 1: 谷底 A=0.95146 @ u=1.55, 即【減光 4.85%】。
+//     Schwarzschild 點質量永远 A≥1, 從不減光 —— 這是單一蟲洞曲線上就看得見的
+//     判準, 不需與黑洞疊圖對比。
+//
+//  5. 觀測台 = 【相機】(不是場景原點)。若以原點為觀測台, 合日時源星與蟲洞在
+//     畫面上相隔 55° —— 曲線說合日而畫面看不到, 視覺與物理脫節。
+//     以相機為觀測台則「你看到的 = 曲線畫的」。代價是 θ_E 隨相機距離變,
+//     ρ_g 在事件期間變動 (實測 2.78–3.41) ⇒ 必須每幀重算 (有了閉式解這很便宜)。
+// =============================================================================
+const WLC = {
+  rhoSrc: 0.2,          // 有限源半徑 (θ_E 單位): 峰值 (4/3)/ρ = 6.67
+  thetaE: 0,            // 目前 θ_E (rad), 每幀依實際幾何重算
+  rhoG: 0,              // ρ_g = b_E/a
+  u: 0, A: 1, beta: 0,  // 目前狀態
+  star: null, starMat: null, starLabel: null, starLabelEl: null, starBase: 0.5,
+  on: false,            // 撐疊區展開時才描圖/跑物理 (預設收起 => 零成本)
+};
+// 第一類完全橢圓積分 K(m), m = k² ∈ [0,1)。AGM 收斂極快 (二次收斂)。
+function ellipticK(m){
+  let g = Math.sqrt(Math.max(1.0 - m, 1e-300)), x = 1.0;
+  for (let i = 0; i < 40; i++){
+    const xn = 0.5 * (x + g), gn = Math.sqrt(x * g);
+    if (Math.abs(xn - gn) < 1e-17 * Math.max(1.0, Math.abs(xn))){ x = g = xn; break; }
+    x = xn; g = gn;
+  }
+  return Math.PI / (2 * x);
+}
+// Ellis–Bronnikov 精確偏折角 α(b)。b ≤ a 的光線穿喉 (回傳 null)。
+function whDeflection(b){
+  if (b <= WH.throatR) return null;
+  const m = Math.pow(WH.throatR / b, 2);
+  return 2 * ellipticK(m) - Math.PI;
+}
+// 由實際幾何解 θ_E: β=0 時透鏡方程 θ = k·α(θ·D_L), k = D_LS/D_S。
+// β(θ) = θ − k·α(θD_L) 在 θ>a/D_L 單調遞增, 故二分法安全。
+function whSolveThetaE(D_L, D_LS, D_S){
+  const k = D_LS / D_S;
+  let lo = WH.throatR / D_L * 1.0000001, hi = 3.0;
+  for (let i = 0; i < 80; i++){
+    const m = 0.5 * (lo + hi);
+    const al = whDeflection(m * D_L);
+    const v = (al === null) ? -1e9 : m - k * al;
+    if (v > 0) hi = m; else lo = m;
+  }
+  return 0.5 * (lo + hi);
+}
+// 無量綱透鏡方程與放大率 (以 ρ_g 參數化; 所有長度均以 a 為單位)。
+function _wlcG(x, rhoG, A0){
+  const b = rhoG * x;
+  if (b <= 1.0) return Infinity;                 // 穿喉: 該影像不存在
+  return (2 * ellipticK(1 / (b * b)) - Math.PI) / A0;
+}
+function _wlcBetaOf(x, rhoG, A0){
+  const gv = _wlcG(Math.abs(x), rhoG, A0);
+  // 穿喉 (b ≤ a) 時 g→∞: 正像支 bt→−∞, 負像支 bt→+∞。符號必須依支別取,
+  // 否則二分法會被推向錯誤邊界。
+  if (!isFinite(gv)) return x > 0 ? -Infinity : Infinity;
+  return x - (x > 0 ? gv : -gv);
+}
+function _wlcSolve(u, sign, rhoG, A0){
+  const xlo = 1.0 / rhoG;
+  let lo = xlo * 1.0000001, hi = Math.max(12.0, Math.abs(u) + 12.0);
+  // m = |x| 為二分變數。單調性【依支別相反】:
+  //   正像支 bt(+m) = m − g(m) 對 m 遞增;
+  //   負像支 bt(−m) = −m + g(m) 對 m 遞減。
+  // 故 v>u 時該往哪邊縮要依 sign 反轉 —— 這是先前一版的 bug (兩支共用同一方向)。
+  const dec = sign < 0;
+  for (let i = 0; i < 60; i++){
+    const m = 0.5 * (lo + hi);
+    const v = _wlcBetaOf(sign * m, rhoG, A0);
+    if ((v > u) !== dec) hi = m; else lo = m;
+  }
+  return sign * 0.5 * (lo + hi);
+}
+function _wlcMu(x, u, rhoG, A0){
+  const h = Math.abs(x) * 1e-6;
+  const b1 = _wlcBetaOf(x + h, rhoG, A0), b0 = _wlcBetaOf(x - h, rhoG, A0);
+  if (!isFinite(b1) || !isFinite(b0)) return 0;
+  const d = (b1 - b0) / (2 * h);
+  return Math.abs(d) > 1e-15 ? Math.abs((x / u) / d) : 0;
+}
+// 點源放大率。A0 = α(b_E) 以參數傳入 (不在此重算): 有限源圓盤平均會呼叫本函數
+// 上百次, 而 A0 只依 ρ_g 而定 —— 重算等於白跑上百次 ellipticK。
+function wlcApoint(u, rhoG, A0){
+  if (Math.abs(u) < 1e-14) return Infinity;
+  const xp = _wlcSolve(u, 1, rhoG, A0), xn = _wlcSolve(u, -1, rhoG, A0);
+  return _wlcMu(xp, u, rhoG, A0) + _wlcMu(xn, u, rhoG, A0);
+}
+// 有限源放大率: 在源圓盤 (半徑 ρ) 上平均點源解。
+// u ≥ 0.6 時點源解已準到 <1.4% (實測), 直接用點源 —— 省下 128× 的圓盤採樣成本。
+function wlcAfinite(u, rhoG, A0, rho){
+  if (u >= 0.6) return wlcApoint(u, rhoG, A0);
+  const NR = 6, NT = 12;                        // 峰值區圓盤採樣 (實測與 40×80 差 <0.7%)
+  const dr = rho / NR, dth = TWO_PI / NT;
+  let tot = 0;
+  for (let i = 1; i <= NR; i++){
+    const r = (i - 0.5) * dr;
+    for (let j = 0; j < NT; j++){
+      const th = (j + 0.5) * dth;
+      const v = wlcApoint(Math.sqrt(u * u + r * r + 2 * u * r * Math.cos(th)), rhoG, A0);
+      if (isFinite(v)) tot += v * r;            // 面積元 r dr dθ
+    }
+  }
+  return tot * dr * dth / (Math.PI * rho * rho);
+}
+
+// =============================================================================
+//  源星與即時光變軌跡
+//
+//  畫的是【實際 A(t) 軌跡】而非預先算好的 A(u) 理論表:
+//   · 觀測台是相機 ⇒ ρ_g = b_E/a 隨相機移動而變 (實測 2.78–3.41),
+//     任何預建的表都會在相機移動後失真。
+//   · 即時軌跡每幀只算一個點 (u≥0.6 時 5 µs), 而且【看到的星變亮變暗與曲線同步】。
+//
+//  源星位置: 沿「CAM_HOME → 蟲洞初始位置」方向放在星空球殼上, 故 simTime=0
+//  (頁面剛載入) 就是【合日】—— 事件一開始就發生, 不需等。
+//  蟲洞繼續公轉 ⇒ β 增大 ⇒ A 從峰值衰減、穿過 A=1、落入減光谷底、再回復。
+// =============================================================================
+const WLC_TRACE_N = 720;                        // 軌跡緩衝區 (環形)
+const WLC_SPAN = 260;                           // 繪圖窗寬 (模擬年)
+const wlcTrace = {
+  t: new Float64Array(WLC_TRACE_N), A: new Float64Array(WLC_TRACE_N),
+  u: new Float64Array(WLC_TRACE_N), head: 0, count: 0,
+};
+function wlcTracePush(t, u, A){
+  const h = wlcTrace.head;
+  wlcTrace.t[h] = t; wlcTrace.u[h] = u; wlcTrace.A[h] = A;
+  wlcTrace.head = (h + 1) % WLC_TRACE_N;
+  if (wlcTrace.count < WLC_TRACE_N) wlcTrace.count++;
+}
+function wlcTraceClear(){ wlcTrace.head = 0; wlcTrace.count = 0; }
+// 源星位置: 從【相機】看, 星必須恰在蟲洞 t=0 的背後, simTime=0 才是合日 (β=0)。
+// ⚠ 必須以 CAM_HOME 為基準放置, 不能以場景原點: 若寫成 dir×R (從原點),
+//   相機在 (0,320,900) 距原點 955 單位 => 從相機看星的方向會有 2.17° 視差,
+//   合日變成 β=2.17° (A=1.38 而非峰值 6.49), 使用者永远看不到最亮的合日峰。
+// 半徑 13000 (略大於星空球殼 12000): sprite 已 depthTest:false, 深度不影響觀感,
+// 而物理上只需 D_S ≫ D_L。
+const WLC_STAR_DIR = new THREE.Vector3(WH.R, 0, 0).sub(CAM_HOME).normalize();
+const WLC_STAR_R = 13000;
+const WLC_STAR_POS = CAM_HOME.clone().addScaledVector(WLC_STAR_DIR, WLC_STAR_R);
+function buildSourceStar(){
+  // 一顆真實的背景源星 (sprite, 亮度隨 A(t) 變)。
+  // 為何用 sprite 而非 Points: 它需要獨立、可預測的亮度與尺寸 (A 直接映射到
+  // sprite scale/opacity), 而星空那 9000 顆是共用一個著色器、亮度由 phase 閃爍決定。
+  //
+  // 【不可聚焦】: 它在 R=12000 的天球上, 但相機 maxDistance=8000 飛不到;
+  // 就算能飛, 聚焦它會把整個太陽系逐出視野 —— 交互上是壞的。故純視覺, 不入 clickable。
+  const mat = new THREE.SpriteMaterial({
+    map: makeGlowTexture(), color: 0xfff0d8, transparent: true, opacity: 1,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false });
+  const sp = new THREE.Sprite(mat);
+  sp.position.copy(WLC_STAR_POS);                // = CAM_HOME + dir×13000 (見 WLC_STAR_POS 註解)
+  sp.renderOrder = 5;                            // 畫在星空之上 (星空在 R=12000 球殼)
+  scene.add(sp);
+  const div = document.createElement('div'); div.className = 'label wh'; div.textContent = t('wlc.star');
+  const label = new CSS2DObject(div); label.position.copy(sp.position); scene.add(label);
+  WLC.star = sp; WLC.starMat = mat; WLC.starLabel = label; WLC.starLabelEl = div;
+  WLC.starBase = 1.0;
+  wlcApplyStar();
+}
+// 源星可見性的【單一事實來源】: 四個條件同時成立才顯示。
+// 不能只看 details 開合 —— 關了蟲洞、或切到 TRAPPIST、或關了標籤, 源星都該隱。
+function wlcSetSourceVisible(){
+  const show = WLC.on && whOn && SYSTEM === 'solar';
+  if (WLC.star) WLC.star.visible = show;
+  // 標籤受 showLabels 管 (與行星標籤同一開關); CSS2D 不看祖先 visible, 要個別設
+  if (WLC.starLabel) WLC.starLabel.visible = show && showLabels;
+}
+// 把 A 映射到源星的視覺亮度。
+// ⚠ 上限必須壓在 bloom threshold(2.0) 以下: 否則峰值 A=6.49 會讓源星進入輝光鏈,
+//   被 UnrealBloomPass 的 mip 鏈燒成方塊 —— 正是本專案已修過的「行星異常閃爍」。
+//   故用對數壓縮: 視覺亮度 = 1 + 0.30·ln(A) (A=6.49 → 1.56; A=0.953 → 0.99),
+//   既看得出變亮變暗, 又永不爆光。
+function wlcApplyStar(){
+  if (!WLC.star) return;
+  const A = WLC.A;
+  const vis = A > 0 ? 1 + 0.30 * Math.log(Math.max(A, 1e-6)) : 1;
+  const base = WLC.starBase;
+  WLC.starMat.opacity = Math.max(0.05, Math.min(1, base * vis * 0.55));
+  const s = 900 * (0.75 + 0.55 * Math.max(0, Math.min(1.6, vis - 0.7)));
+  WLC.star.scale.set(s, s, 1);
+}
+
+// =============================================================================
+//  每幀推進: 由實際幾何算 β → θ_E → u → A
+// =============================================================================
+const _wlcW = new THREE.Vector3(), _wlcS = new THREE.Vector3();
+let wlcLastA0RhoG = -1, wlcLastA0 = 0;
+function wlcStep(){
+  if (!WLC.star || !whOn) return;
+  // 觀測台 = 相機 (不是場景原點): 原點為觀測台時, 合日的星與蟲洞在畫面上相隔 55°,
+  // 曲線說合日而畫面看不到 —— 視覺與物理脫節。
+  _wlcW.copy(WH.pos).sub(camera.position);                 // 相機 → 蟲洞
+  _wlcS.copy(WLC.star.position).sub(camera.position);      // 相機 → 源星
+  const D_L = _wlcW.length(), D_S = _wlcS.length();
+  if (!(D_L > 1e-6) || !(D_S > 1e-6)) return;
+  const D_LS = _wlcS.clone().sub(_wlcW).length();
+  // β = 觀測者所見的「蟲洞 ↔ 源星」角分離
+  const cosb = THREE.MathUtils.clamp(_wlcW.dot(_wlcS) / (D_L * D_S), -1, 1);
+  const beta = Math.acos(cosb);
+  // θ_E 由精確透鏡方程解 (β=0), 每幀一次 (~3 µs)
+  const thetaE = whSolveThetaE(D_L, D_LS, D_S);
+  const bE = thetaE * D_L, rhoG = bE / WH.throatR;
+  // A0 = α(b_E) 依 ρ_g 而定: 快取, 避免每幀重算 ellipticK
+  if (Math.abs(rhoG - wlcLastA0RhoG) > 1e-9){
+    wlcLastA0 = 2 * ellipticK(1 / (rhoG * rhoG)) - Math.PI;
+    wlcLastA0RhoG = rhoG;
+  }
+  const u = beta / thetaE;
+  const A = wlcAfinite(u, rhoG, wlcLastA0, WLC.rhoSrc);
+  WLC.beta = beta; WLC.thetaE = thetaE; WLC.rhoG = rhoG; WLC.u = u;
+  WLC.A = isFinite(A) ? A : 1;
+  wlcApplyStar();
+  wlcTracePush(simTime, u, WLC.A);
+}
+
+// =============================================================================
+//  光變曲線描圖 (2D canvas)
+//
+//  畫的是【實測 A(t) 軌跡】(星實際變亮變暗的歷史), 不是預先算好的理論表。
+//  原因: 觀測台是相機, ρ_g 會隨相機移動而變 ⇒ 預建的表會失真。
+//  軌跡用【環形緩衝】存最近 WLC_SPAN 模擬年, 只重畫視窗內的點。
+//
+//  縱軸採【雙尺度】: 峰值 A=6.49 而谷底只有 4.7% 深 —— 線性軸上谷底深度
+//  不足 1px (實測 0.79px), 完全看不見。所以主軸畫完整 A (看峰),
+//  另以 A−1 的放大軸 (×12) 重畫同一條曲線, 谷底與 A=1 交點就清楚了。
+// =============================================================================
+const WLC_CANVAS_H = 96;
+function wlcDraw(){
+  const cv = document.getElementById('wlcCanvas');
+  if (!cv || !WLC.on) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const cw = cv.clientWidth || 236;
+  if (cv.width !== Math.round(cw * dpr)){ cv.width = Math.round(cw * dpr); cv.height = Math.round(WLC_CANVAS_H * dpr); }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = cw, H = WLC_CANVAS_H;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = 'rgba(6,10,18,0.55)'; g.fillRect(0, 0, W, H);
+
+  const n = wlcTrace.count;
+  if (n < 2){
+    g.fillStyle = 'rgba(220,232,248,0.55)'; g.font = '10px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.fillText(t('wlc.waiting'), W / 2, H / 2);
+    return;
+  }
+  // 時間窗: 以最新點為右緣, 往回 WLC_SPAN 模擬年
+  const hi = (wlcTrace.head - 1 + WLC_TRACE_N) % WLC_TRACE_N;
+  const tNow = wlcTrace.t[hi], t0 = tNow - WLC_SPAN;
+  const yOf = A => H - 6 - (Math.min(A, 7.2) / 7.2) * (H - 14);   // 主軸: 0..7.2
+  // A=1 基準線 (減光/放大的分界)
+  const y1 = yOf(1);
+  g.strokeStyle = 'rgba(140,180,220,0.35)'; g.setLineDash([3, 3]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, y1); g.lineTo(W, y1); g.stroke(); g.setLineDash([]);
+  g.fillStyle = 'rgba(160,190,225,0.6)'; g.font = '9px system-ui, sans-serif'; g.textAlign = 'left';
+  g.fillText('A=1', 3, y1 - 3);
+
+  // 收集視窗內的點 (依時間排序)
+  const pts = [];
+  for (let k = 0; k < n; k++){
+    const i = (wlcTrace.head - n + k + WLC_TRACE_N * 2) % WLC_TRACE_N;
+    if (wlcTrace.t[i] >= t0) pts.push([wlcTrace.t[i], wlcTrace.A[i], wlcTrace.u[i]]);
+  }
+  const xOf = tt => ((tt - t0) / WLC_SPAN) * W;
+  if (pts.length > 1){
+    // 實測 A(t) 軌跡
+    g.strokeStyle = 'rgba(168,220,255,0.95)'; g.lineWidth = 1.6;
+    g.beginPath();
+    pts.forEach((p, i) => { const X = xOf(p[0]), Y = yOf(p[1]); i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+    g.stroke();
+    // 放大軸重畫同一條曲線 (A−1)×12: 否則 4.7% 的減光谷底在主軸上不足 1px
+    const yZoom = A => y1 - (A - 1) * 12 * ((H - 14) / 7.2);
+    g.strokeStyle = 'rgba(255,190,120,0.85)'; g.lineWidth = 1.2;
+    g.beginPath();
+    pts.forEach((p, i) => { const X = xOf(p[0]), Y = yZoom(p[1]); i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+    g.stroke();
+    // 目前點
+    const last = pts[pts.length - 1];
+    g.fillStyle = '#fff2d0';
+    g.beginPath(); g.arc(xOf(last[0]), yOf(last[1]), 2.4, 0, TWO_PI); g.fill();
+  }
+  // 目前值
+  g.fillStyle = 'rgba(226,238,252,0.9)'; g.font = '10px ui-monospace, monospace'; g.textAlign = 'right';
+  g.fillText(`A = ${WLC.A.toFixed(4)}`, W - 4, 12);
+  g.fillStyle = WLC.A < 1 ? 'rgba(255,176,150,0.95)' : 'rgba(168,220,255,0.8)';
+  g.fillText(WLC.A < 1 ? t('wlc.dimming') : t('wlc.brightening'), W - 4, 25);
+  // 圖例
+  g.textAlign = 'left'; g.font = '9px system-ui, sans-serif';
+  g.fillStyle = 'rgba(168,220,255,0.9)'; g.fillText(t('wlc.legendA'), 3, H - 5);
+  g.fillStyle = 'rgba(255,190,120,0.85)'; g.fillText(t('wlc.legendZoom'), 62, H - 5);
+}
+// 讀數 (文字): 目前的 β / θ_E / u / A 與減光狀態
+function wlcRenderStats(){
+  const el = document.getElementById('wlcStats');
+  if (!el) return;
+  if (!WLC.on){ el.textContent = ''; return; }
+  if (!whOn){ el.innerHTML = `<span class="ds-note">${t('wlc.needWh')}</span>`; return; }
+  const deg = WLC.beta * 180 / Math.PI;
+  const thEdeg = WLC.thetaE * 180 / Math.PI;
+  el.innerHTML = t('wlc.stats', {
+    beta: deg.toFixed(2), thetaE: thEdeg.toFixed(2), u: WLC.u.toFixed(3),
+    A: WLC.A.toFixed(4), dipPct: ((1 - WLC.A) * 100).toFixed(2), rhoG: WLC.rhoG.toFixed(2),
+  }).split('\n').map(ln => {
+    const seg = ln.split('\t');
+    return seg.length > 1
+      ? `<span class="ds-l">${seg[0]}</span><span class="ds-v">${seg.slice(1).join(' ')}</span>`
+      : `<span class="ds-full">${seg[0]}</span>`;
+  }).join('');
+}
+
+// =============================================================================
 //  彗星 (雙尾: 離子尾 + 塵尾)
 //
 //  軌道: 高離心率橢圓 (e=0.967, 類哈雷), 真實克卜勒方程求解 ⇒ 近日點附近
@@ -2301,6 +2634,10 @@ function syncSystemLabels(){
   if (WH.label) WH.label.visible = s && whOn;
   if (COMET.label) COMET.label.visible = s;
   for (const lo of trap.labelObjs) lo.visible = !s;
+  // 微透鏡源星: 可見性依 WLC.on/whOn/SYSTEM/showLabels 四個條件綜合判斷。
+  // 放這裡因為本函數已是「所有標籤可見性的單一事實來源」, 且被
+  // setSystem (切系統) 與 renderDynamicUI (換語言) 兩條路徑呼叫。
+  wlcSetSourceVisible();
 }
 // 軸傾指示器: 只在【太陽系模式】且【聚焦某行星】(followIdx ∈ 0..N-1) 時顯示該行星的軸。
 // TRAPPIST 模式的行星索引 ≥100, 不在 planetObjs 範圍 => 全部隱藏。
@@ -2846,6 +3183,7 @@ $('tWH').addEventListener('click', e => {
   whOn = !whOn; e.target.classList.toggle('on', whOn);
   e.target.setAttribute('aria-pressed', String(whOn));
   renderWhNote();
+  wlcSetSourceVisible();                        // 源星可見性依 whOn/WLC.on/SYSTEM 重評 (開或關都要)
   const rimMat = WH.rimMat;
   const whLabelDiv = WH.label.element;
   const cur = rimMat.opacity / 0.5;              // rim 基準不透明度為 0.5
@@ -2859,6 +3197,21 @@ $('tWH').addEventListener('click', e => {
       WH.group.visible = false; WH.label.visible = false; whLabelDiv.style.display = 'none';
       if (followIdx === -4) focusOn(-1); // 停止追擊隱形蟲洞
     } });
+});
+// 光變曲線摺疊區: 展開才建立源星與跑物理 (WLC.on), 收起則完全零每幀成本。
+// 用 <details> 原生 toggle 事件 (鍵盤/螢幕閱讀器可操作)。
+const wlcBox = $('wlcBox');
+if (wlcBox) wlcBox.addEventListener('toggle', () => {
+  WLC.on = wlcBox.open;
+  if (WLC.on){
+    if (!WLC.star) buildSourceStar();          // 首次展開才建 (惰性初始化)
+    wlcTraceClear();                            // 新開 => 清空舊軌跡 (避免跨會話接線)
+    wlcSetSourceVisible();
+    wlcDraw(); wlcRenderStats();               // 立即畫一次 (不等下一幀)
+  } else {
+    wlcSetSourceVisible();
+    const el = $('wlcStats'); if (el) el.textContent = '';
+  }
 });
 $('tBH').addEventListener('click', e => {
   bhOn = !bhOn; e.target.classList.toggle('on', bhOn);
@@ -3486,6 +3839,7 @@ function updatePlanet(o, dt){
 }
 
 let lensSmooth = 2.5;          // 透鏡強度包絡 (L12: 開關時淡入淡出而非瞬變)
+let wlcLastDraw = 0;           // 光變曲線描圖節流 (performance.now() 毫秒)
 const _desired = new THREE.Vector3();
 
 // 分頁隱藏時停掉 rAF: 這個場景每幀都在跑 bloom + 12 顆行星 + 標籤, 背景全速執行
@@ -3586,6 +3940,10 @@ function animate(){
   camera.updateMatrixWorld();
   camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
 
+  // 蟲洞微透鏡光變: 必須在 controls.update() 之後 —— 觀測台是相機,
+  // 相機位置定格後才算 β/θ_E/A, 曲線才與畫面對應。只在展開時跑 (WLC.on)。
+  if (WLC.on && SYSTEM === 'solar') wlcStep();
+
   // 黑洞: 視空間位置 (幾何透鏡彎曲) + 相機盤面方位角 (都卜勒方向)
   if (bhOn) {
     _tmpV.copy(BH.pos).applyMatrix4(camera.matrixWorldInverse);
@@ -3664,6 +4022,13 @@ function animate(){
   }
   whLensingPass.uniforms.strength.value = whProjected ? whSmooth : 0;
 
+  // 光變曲線描圖: 節流到 ~20 fps (50ms)。canvas 重繪與 DOM 文字寫入都比 3D 貴,
+  // 而曲線本身變化很慢 (一個事件跨越數十模擬年), 每幀重繪是浪費。
+  if (WLC.on && SYSTEM === 'solar'){
+    const now = performance.now();
+    if (now - wlcLastDraw > 50){ wlcLastDraw = now; wlcDraw(); wlcRenderStats(); }
+  }
+
   composer.render();
   labelRenderer.render(scene, camera);
 }
@@ -3692,6 +4057,8 @@ function renderDynamicUI(){
   if (BH.label && BH.label.element) BH.label.element.textContent = t('label.bh');
   if (WH.label && WH.label.element) WH.label.element.textContent = t('label.wh');
   if (COMET.label && COMET.label.element) COMET.label.element.textContent = t('label.comet');
+  // 微透鏡源星標籤 (惰性建立, 可能還不存在)
+  if (WLC.starLabelEl) WLC.starLabelEl.textContent = t('wlc.star');
   // 2. 鏡頭追蹤選單: 只改 text, value (索引) 不動 → 選中項不會被刷掉
   //    (focusOptions 只含太陽系行星; TRAPPIST 選項為拉丁字母名稱, 與語言無關)
   for (const f of focusOptions) f.opt.textContent = pname(f.name);
@@ -3704,6 +4071,8 @@ function renderDynamicUI(){
   renderDysonStats();   // 換語言時物理讀數也要重新取詞
   renderWhNote();       // 蟲洞說明同樣要重新取詞
   renderTrapNote();     // TRAPPIST 說明同樣要重新取詞
+  wlcRenderStats();     // 光變曲線讀數重新取詞 (收起時自行清空)
+  wlcDraw();            // 重繪 canvas: 圖例/等待文字都是譯詞
   updateQualityLabel(); // 貼圖層級/降級提示重新取詞
   dsSyncLabels();       // 殼/環的半徑標籤也要跟著換語言
 }
