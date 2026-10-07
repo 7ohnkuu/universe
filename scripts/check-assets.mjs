@@ -22,9 +22,12 @@ const main = read('main.js');
 // 只解析 PLANETS 區塊 (MOONS 表也有 name 欄位, 全域正則會誤抓)
 const planetsBlock = main.match(/const PLANETS = \[([\s\S]*?)\n\];/);
 if (!planetsBlock){ console.error('FAIL: 找不到 main.js 的 PLANETS 表'); process.exit(1); }
-const planetNames = [...planetsBlock[1].matchAll(/name:\s*'([^']+)'/g)].map(m => m[1]);
-if (planetNames.length !== 8) {
-  console.error(`FAIL: 從 main.js 解析到 ${planetNames.length} 顆行星, 預期 8 — 請同步更新本腳本`);
+// 只數【頂層】行星: 每筆以行首「{ name:」起始。
+// 不能用全域 /name:/ —— 冥王星項內嵌的 binary:{ name:'Charon' } 會被誤抓成行星。
+const planetNames = [...planetsBlock[1].matchAll(/^\s*\{\s*name:\s*'([^']+)'/gm)].map(m => m[1]);
+const EXPECT_PLANETS = 9;   // 八大行星 + 冥王星 (矮行星); 新增/移除天體時同步這裡
+if (planetNames.length !== EXPECT_PLANETS) {
+  console.error(`FAIL: 從 main.js 解析到 ${planetNames.length} 顆行星, 預期 ${EXPECT_PLANETS} — 請同步更新本腳本`);
   process.exit(1);
 }
 
@@ -34,9 +37,12 @@ if (!baseMapBlock) { console.error('FAIL: 找不到 planetDay() 的 base 對照�
 const baseMap = Object.fromEntries(
   [...baseMapBlock[1].matchAll(/'([^']+)'\s*:\s*'([^']+)'/g)].map(m => [m[1], m[2]]));
 
-// 只有 2k 的行星 (main.js: 僅 2k)
-const only2k = [...main.matchAll(/if \(p\.name === '([^']+)'\) return TEX_BASE \+ '([^']+)'; \/\/ 僅 2k/g)]
-  .map(m => [m[1], m[2]]);
+// 固定單解析度貼圖的行星 (planetDay() 直接回傳 TEX_BASE + '檔名', 無 prefix):
+//   天王星/海王星 (SSS 僅 2k)、冥王星 (New Horizons 等距圓柱, 無 8k)。
+// 依註解結尾分類過於脆弱 (冥王星的註解與天王星不同), 改以語法本身辨識:
+// 任何 `if (p.name === 'X') return TEX_BASE + 'file';` 都是固定檔。
+const fixedTex = [...main.matchAll(/if \(p\.name === '([^']+)'\) return TEX_BASE \+ '([^']+)\.jpg'/g)]
+  .map(m => [m[1], m[2] + '.jpg']);
 
 // 假 8k (木星/土星): main.js 以 fake8k 別名回 4k_
 const fake8k = [...main.matchAll(/const fake8k = \(base === '(\w+)' \|\| base === '(\w+)'\)/g)]
@@ -49,6 +55,9 @@ const moonsBlock = main.match(/const MOONS = \[([\s\S]*?)\n\];/);
 if (!moonsBlock){ console.error('FAIL: 找不到 main.js 的 MOONS 表'); process.exit(1); }
 const moonMaps = [...moonsBlock[1].matchAll(/map:\s*'([^']+)'/g)].map(m => m[1]);
 
+// 雙體伴星 (冥王星–凱龍): binary:{ map:'charon' } — 單解析度, 與衛星同級
+const binaryMaps = [...planetsBlock[1].matchAll(/binary:\s*\{[^}]*map:\s*'([^']+)'/g)].map(m => m[1]);
+
 // --- 依解析度組出會被引用的檔案 -------------------------------------------
 const prefix = q => q === '8k' ? '8k_' : q === '4k' ? '4k_' : '';
 const wanted = { '2k': new Set(), '4k': new Set(), '8k': new Set() };
@@ -56,7 +65,7 @@ const wanted = { '2k': new Set(), '4k': new Set(), '8k': new Set() };
 for (const q of Object.keys(wanted)) {
   const pre = prefix(q);
   for (const name of planetNames) {
-    const fixed = Object.fromEntries(only2k)[name];
+    const fixed = Object.fromEntries(fixedTex)[name];
     if (fixed) { wanted[q].add(fixed); continue; }              // 天王星/海王星: 永遠 2k
     const base = baseMap[name];
     if (!base) continue;                                        // 地球另有 earthTex()
@@ -72,6 +81,8 @@ for (const q of Object.keys(wanted)) {
   wanted[q].add(`${pre}moon.jpg`);
   // 伽利略/土星衛星: 單解析度 (無前綴), 來源 NASA/JPL 公有領域
   for (const m of moonMaps) wanted[q].add(`${m}.jpg`);
+  // 雙體伴星 (凱龍): 單解析度, 來源 NASA New Horizons 公有領域
+  for (const m of binaryMaps) wanted[q].add(`${m}.jpg`);
 }
 
 let bad = 0;

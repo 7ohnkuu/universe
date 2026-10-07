@@ -53,6 +53,13 @@ const PLANETS = [
   { name:'土星', a:9.58, e:0.056, period:29.46,  radiusKm:58232, incl:2.49, node:113.7,peri:339.4, tilt:26.73, spinHr:10.7,    type:'gas',   color:[227,210,162], color2:[180,160,110], bands:10, seed:66, ring:true },
   { name:'天王星',a:19.2, e:0.046, period:84.0,   radiusKm:25362, incl:0.77, node:74.0, peri:96.9,  tilt:97.77, spinHr:-17.24,  type:'ice',   color:[159,224,230], seed:77 },
   { name:'海王星',a:30.0, e:0.009, period:164.8,  radiusKm:24622, incl:1.77, node:131.8,peri:273.2, tilt:28.32, spinHr:16.11,   type:'ice',   color:[59,91,219],  seed:88 },
+  // 冥王星 (矮行星, 古柏帶天體): 高離心率 (0.244) 與高軌道傾角 (17.16°) 是它的招牌。
+  // binary = 冥王星–凱龍雙體系統: 兩者繞【共同質心】互繞。sepF 以冥王星顯示半徑為單位,
+  // 取真實值 16.5 (=19640 km / 1188 km), 於是冥王星到質心 = sepF×q/(1+q) = 1.79×半徑
+  // > 1 ⇒ 質心落在冥王星【表面之外】。這是它與一般「行星＋衛星」最不同之處。
+  // 潮汐互鎖: 兩者永遠以同一面朝向對方 (自轉週期 = 公轉週期 = 6.387 天)。
+  { name:'冥王星',a:39.5, e:0.2488, period:248.0,  radiusKm:1188,  incl:17.16,node:110.3,peri:113.8, tilt:122.53,spinHr:-153.3,  type:'dwarf', color:[201,172,142], seed:99,
+    binary:{ name:'Charon', map:'charon', radiusKm:606, periodD:6.387, massRatio:0.1217, sepF:16.5, color:[150,145,140] } },
 ];
 
 // 距離壓縮係數 (讓內外行星都可視), 行星大小相對比保持真實
@@ -593,6 +600,7 @@ function prefix(){ return QUALITY === '8k' ? '8k_' : QUALITY === '4k' ? '4k_' : 
 function planetDay(p){
   if (p.name === '天王星') return TEX_BASE + 'uranus.jpg'; // 僅 2k
   if (p.name === '海王星') return TEX_BASE + 'neptune.jpg'; // 僅 2k
+  if (p.name === '冥王星') return TEX_BASE + 'pluto.jpg';  // New Horizons 等距圓柱地圖, 單解析度 (無 8k)
   const base = { '水星':'mercury', '金星':'venus_surface', '火星':'mars', '木星':'jupiter', '土星':'saturn' }[p.name];
   const fake8k = (base === 'jupiter' || base === 'saturn') && QUALITY === '8k';
   return TEX_BASE + (fake8k ? '4k_' : prefix()) + base + '.jpg';
@@ -983,6 +991,31 @@ async function upgradeMoonTex(mesh, mi, gen){
   mat.map = tex; mat.color.set(0xffffff); mat.needsUpdate = true;
   T.texUrl = url;
 }
+// 冥王星–凱龍雙體伴星 (Charon): 單解析度等距圓柱地圖 (gen-pluto-textures.mjs 產製),
+// 與月球同一處理 — 極區平滑消除拉伸條輻, 再由高程導出法線貼圖 (晨昏線地形陰影)。
+async function upgradeBinary(cMesh, p, gen){
+  const bd = p.binary;
+  const url = TEX_BASE + bd.map + '.jpg';
+  const T = cMesh.userData;
+  if (T.texUrl === url) return;
+  const t = await loadTex(url, true);
+  if (gen !== texGen){ t && t.dispose(); return; }
+  if (!t) return;
+  const cv = document.createElement('canvas');
+  cv.width = t.image.width; cv.height = t.image.height;
+  cv.getContext('2d').drawImage(t.image, 0, 0);
+  smoothPoles(cv);
+  t.dispose();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = MAX_ANISO;
+  const mat = cMesh.material;
+  if (mat.map) mat.map.dispose();
+  if (mat.normalMap) mat.normalMap.dispose();
+  mat.map = tex; mat.color.set(0xffffff);
+  mat.normalMap = normalFromHeight(tex.image, 3.0);
+  mat.normalScale.set(0.8, 0.8); mat.needsUpdate = true;
+  T.texUrl = url;
+}
 async function upgradeMoon(moon, gen){
   const url = moonTex();
   const T = moon.userData;
@@ -1044,7 +1077,45 @@ PLANETS.forEach((p, idx) => {
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(p.rDisp, 64, 64), mat);
   mesh.castShadow = true; mesh.receiveShadow = true;
   mesh.userData.focusIndex = idx;
-  obj.add(mesh);
+  // 大氣/衛星的掛點: 一般行星是 obj (原點=行星心); 雙體系統改掛在冥王星本體的
+  // holder 上 (原點=質心, 冥王星偏離質心 dP), 否則大氣球會與冥王星錯位。
+  let atmoParent = obj;
+  let bin = null;
+  if (p.binary) {
+    // 冥王星–凱龍雙體: 兩者繞【共同質心】互繞, 質心落在冥王星表面之外。
+    //   q   = M_charon / M_pluto = 0.1217
+    //   sep = 兩者中心距 (顯示單位) = rDisp × sepF (sepF=16.5 為真實比例 19640/1188)
+    //   dP  = sep·q/(1+q)  (冥王星→質心),  dC = sep·1/(1+q)  (凱龍→質心)
+    // pivot 旋轉 = 公轉; 兩球在 pivot 內不自轉 ⇒ 潮汐互鎖 (同一面永遠朝向對方)。
+    const bd = p.binary, q = bd.massRatio;
+    const sep = p.rDisp * bd.sepF;
+    const dP = sep * q / (1 + q), dC = sep / (1 + q);
+    const pivot = new THREE.Group();
+    obj.add(pivot);
+    const plutoHolder = new THREE.Group(); plutoHolder.position.x = -dP; pivot.add(plutoHolder);
+    plutoHolder.add(mesh);
+    atmoParent = plutoHolder;
+    const cCol = bd.color;
+    const cMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(cCol[0]/255, cCol[1]/255, cCol[2]/255), roughness: 1.0 });
+    applyWrapLighting(cMat, 0.08, null);
+    cMat.envMapIntensity = 0.12;
+    const cMesh = new THREE.Mesh(new THREE.SphereGeometry(p.rDisp * (bd.radiusKm / p.radiusKm), 48, 48), cMat);
+    cMesh.castShadow = true; cMesh.receiveShadow = true;
+    const charonHolder = new THREE.Group(); charonHolder.position.x = dC; charonHolder.add(cMesh);
+    pivot.add(charonHolder);
+    // 質心連線 + 質心標記: 直觀顯示「質心不在冥王星內」 (教學價值)
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-dP, 0, 0), new THREE.Vector3(dC, 0, 0) ]);
+    pivot.add(new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0x8899bb, transparent: true, opacity: 0.4 })));
+    const bary = new THREE.Mesh(new THREE.SphereGeometry(Math.max(p.rDisp * 0.12, 0.05), 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffd9a0 }));
+    pivot.add(bary);
+    p._upgC = upgradeBinary(cMesh, p, texGen);
+    bin = { pivot, plutoHolder, charonHolder, mesh, cMesh, cMat, sep, dP, dC, q,
+            periodYr: bd.periodD / 365.25, angle: 0, bary };
+  } else {
+    obj.add(mesh);
+  }
   clickable.push(mesh);
   // 隱形點擊代理球: 半徑至少 9.5 (預設視距 ~950 下約 10px), 讓小行星容易點中
   const proxy = new THREE.Mesh(new THREE.SphereGeometry(Math.max(p.rDisp * 2.5, 9.5), 16, 12), clickProxyMat);
@@ -1055,6 +1126,9 @@ PLANETS.forEach((p, idx) => {
   p._upg = upgradePlanet(p, mat, texGen); // 非同步載入真實 NASA 貼圖 (降級則程序化)
 
   // 地球: 雲層 + 藍色大氣; 金星: 黃色大氣
+  // 大氣一律掛在 atmoParent (=obj, 雙體系統則為冥王星本體 holder) 並以其為
+  // ownerObj: addAtmosphere 每幀取 ownerObj 的世界座標算視空間太陽方向,
+  // 掛錯父節點會使大氣與行星球體錯位 (質心≠冥王星心)。
   if (p.name === '地球') {
     const clouds = new THREE.Mesh(
       new THREE.SphereGeometry(p.rDisp * 1.012, 64, 64),
@@ -1062,19 +1136,23 @@ PLANETS.forEach((p, idx) => {
     );
     obj.add(clouds); p._clouds = clouds;
     clouds.castShadow = true; // alphaTest>0 -> r160 自動以 map/alphaMap 生成 distance 變體, 雲影不再是實心球
-    obj.add(addAtmosphere(p.rDisp * 1.03, 0x3a7bd5, 2.5, obj));
+    atmoParent.add(addAtmosphere(p.rDisp * 1.03, 0x3a7bd5, 2.5, atmoParent));
   } else if (p.name === '金星') {
-    obj.add(addAtmosphere(p.rDisp * 1.05, 0xd9b06a, 2.5, obj));
+    atmoParent.add(addAtmosphere(p.rDisp * 1.05, 0xd9b06a, 2.5, atmoParent));
   } else if (p.name === '火星') {
-    obj.add(addAtmosphere(p.rDisp * 1.02, 0xd88a5a, 3.5, obj));
+    atmoParent.add(addAtmosphere(p.rDisp * 1.02, 0xd88a5a, 3.5, atmoParent));
   } else if (p.name === '木星') {
-    obj.add(addAtmosphere(p.rDisp * 1.03, 0xd8bd93, 2.8, obj));
+    atmoParent.add(addAtmosphere(p.rDisp * 1.03, 0xd8bd93, 2.8, atmoParent));
   } else if (p.name === '土星') {
-    obj.add(addAtmosphere(p.rDisp * 1.03, 0xe6d8ab, 2.8, obj));
+    atmoParent.add(addAtmosphere(p.rDisp * 1.03, 0xe6d8ab, 2.8, atmoParent));
   } else if (p.name === '天王星') {
-    obj.add(addAtmosphere(p.rDisp * 1.04, 0xa8ecf2, 2.8, obj));
+    atmoParent.add(addAtmosphere(p.rDisp * 1.04, 0xa8ecf2, 2.8, atmoParent));
   } else if (p.name === '海王星') {
-    obj.add(addAtmosphere(p.rDisp * 1.04, 0x4f74ff, 2.8, obj));
+    atmoParent.add(addAtmosphere(p.rDisp * 1.04, 0x4f74ff, 2.8, atmoParent));
+  } else if (p.name === '冥王星') {
+    // New Horizons 實測: 冥王星有一層稀薄氮氣大氣, 逆光時可見【藍色霾層】。
+    // 取極淡的藍白 Fresnel, power 較高 (3.8) 讓它只在極邊緣浮現。
+    atmoParent.add(addAtmosphere(p.rDisp * 1.09, 0x9fc4ff, 3.8, atmoParent));
   }
 
   // 土星環
@@ -1212,12 +1290,15 @@ PLANETS.forEach((p, idx) => {
   ecliptic.add(orbitLine);
 
   // 標籤 (div 存進 planetObjs, 換語言時由 renderDynamicUI() 重繪)
+  // 雙體系統必須掛在冥王星本體 (atmoParent=plutoHolder) 而非 obj (質心):
+  // 否則標籤會隨雙體互繞而從冥王星身上飄走。
   const div = document.createElement('div'); div.className='label'; div.textContent=pname(p.name);
-  const label = new CSS2DObject(div); label.position.set(0, p.rDisp*1.6, 0); obj.add(label);
+  const label = new CSS2DObject(div); label.position.set(0, p.rDisp*1.6, 0); atmoParent.add(label);
 
   planetObjs.push({ data:p, obj, mesh, orbitBase:m, orbitLine, labelEl:div,
                     ring: p.ring ? ring : null, moon: p.moon ? moon : null,
-                    moons: p._moons || [] });
+                    moons: p._moons || [], bin });
+  if (bin) p._binR = bin.dC + p.rDisp * (p.binary.radiusKm / p.radiusKm) + 0.3;  // 聚焦時需涵蓋凱龍軌道
   const opt = new Option(pname(p.name), String(idx));
   focusSelect.add(opt);
   focusOptions.push({ opt, name: p.name });
@@ -1702,6 +1783,8 @@ addEventListener('keydown', e => {
     case 'd': case 'D': e.preventDefault(); $('tDyson').click(); break;
     case 'w': case 'W': e.preventDefault(); $('tWH').click(); break;
     case 'c': case 'C': e.preventDefault(); focusOn(-5); break;   // 彗星
+    case 'p': case 'P': e.preventDefault(); focusOn(8); break;    // 冥王星 (索引 8; 數字鍵已滿, 用字母)
+    case 'a': case 'A': e.preventDefault(); $('tBelt').click(); break;  // 小行星帶
   }
 });
 
@@ -1849,7 +1932,7 @@ function focusEffR(idx){
   if (idx === -4) return WH.throatR * 2.2;         // 蟲洞: 含喉緣餘裕
   if (idx === -5) return 6;                        // 彗星: 含彗髮餘裕
   const p = PLANETS[idx];
-  return p.rDisp * (p.ring ? 2.9 : 1.4);           // 土星含環餘裕 (環外緣 2.4×rDisp)
+  return p._binR || p.rDisp * (p.ring ? 2.9 : 1.4);           // 土星含環餘裕; 雙體含凱龍軌道餘裕
 }
 function focusDistFor(idx){
   if (idx === -3) return BH.diskOuter * 0.9 + 30;  // 黑洞: 停在吸積盤外側
@@ -2517,6 +2600,17 @@ function updatePlanet(o, dt){
   if (w > MAX_SPD) w = MAX_SPD; else if (w < -MAX_SPD) w = -MAX_SPD;
   p._spin = (p._spin || 0) + dt * w;
   o.mesh.rotation.y = p._spin;
+  // 冥王星–凱龍雙體: 潮汐互鎖 ⇒ 兩者自轉週期 = 公轉週期 = 6.387 天。
+  // 實作: 旋轉 pivot (公轉) 即可, 兩球在 pivot 內【不自轉】 ⇒ 同一面永遠朝向對方。
+  // 故冥王星本體不能再套用 o.mesh.rotation.y = p._spin (那會破壞互鎖) — 回退之。
+  // 角速度同以 MAX_SPD 限速 (與行星自轉、月球軌道一致, 避免高速下紋理閃爍)。
+  if (o.bin){
+    let wb = TWO_PI * simSpeed / o.bin.periodYr;
+    if (wb > MAX_SPD) wb = MAX_SPD; else if (wb < -MAX_SPD) wb = -MAX_SPD;
+    o.bin.angle += dt * wb;
+    o.bin.pivot.rotation.y = o.bin.angle;
+    o.mesh.rotation.y = 0;                    // 潮汐互鎖: 相對於 pivot 不自轉
+  }
   if (p._clouds) p._clouds.rotation.y = p._spin * 1.5;       // 雲層略快於地表
   if (p._moonPivot){                                          // 月球軌道同限速: 0.0748 年週期@0.2 = 2.7 轉/秒
     let wm = TWO_PI * simSpeed / 0.0748;
@@ -2727,6 +2821,7 @@ async function hideLoader(){
   const jobs = [];
   for (const p of PLANETS){
     if (p._upg) jobs.push(p._upg);
+    if (p._upgC) jobs.push(p._upgC);      // 冥王星–凱龍雙體伴星
     if (p._ringUpg) jobs.push(p._ringUpg);
     if (p._moonUpg) jobs.push(p._moonUpg);
     if (p._moons) for (const mo of p._moons) jobs.push(mo.upg);

@@ -84,7 +84,7 @@
       'loader.tex': '載入中 · 貼圖 {done}/{total}',
       'loader.texBytes': '載入中 · 貼圖 {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': '載入進度',
-      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼 · W 蟲洞 · C 彗星',
+      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · P 冥王星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼 · W 蟲洞 · C 彗星 · A 小行星帶',
 
       'label.bh': '黑洞 (引力透鏡)',
       'opt.bh': '黑洞',
@@ -107,6 +107,7 @@
 
       'planet.水星': '水星', 'planet.金星': '金星', 'planet.地球': '地球', 'planet.火星': '火星',
       'planet.木星': '木星', 'planet.土星': '土星', 'planet.天王星': '天王星', 'planet.海王星': '海王星',
+      'planet.冥王星': '冥王星',
       'planet.太陽': '太陽',
     },
 
@@ -175,7 +176,7 @@
       'loader.tex': 'Loading · textures {done}/{total}',
       'loader.texBytes': 'Loading · textures {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': 'Loading progress',
-      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell · W wormhole · C comet',
+      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · P Pluto · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell · W wormhole · C comet · A asteroid belt',
 
       'label.bh': 'Black hole (lensing)',
       'opt.bh': 'Black hole',
@@ -198,6 +199,7 @@
 
       'planet.水星': 'Mercury', 'planet.金星': 'Venus', 'planet.地球': 'Earth', 'planet.火星': 'Mars',
       'planet.木星': 'Jupiter', 'planet.土星': 'Saturn', 'planet.天王星': 'Uranus', 'planet.海王星': 'Neptune',
+      'planet.冥王星': 'Pluto',
       'planet.太陽': 'Sun',
     },
   };

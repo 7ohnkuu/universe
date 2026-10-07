@@ -27,13 +27,22 @@ const LIST = path.join(ROOT, 'scripts', 'simp-chars.txt');
 //  只排除 simp-chars.txt —— 它是資料檔, 內容必然全是簡體字。
 //  其餘腳本 (含產生器與本檔) 舉例時一律寫碼位, 因此能被自己稽核。
 //  不在清單: vendor/ 與 textures/ —— 第三方程式與二進位貼圖。
+//
+//  scripts/ 下的 .mjs / .sh 一律【自動納入】, 不再手寫清單:
+//  每加一個離線腳本就漏進稽核一次 (先前漏了 fix-saturn-pole / gen-pluto-textures),
+//  自動發現後新腳本無須改本檔就會被檢查。
 const SCAN = [
   'index.html', 'main.js', 'i18n.js', 'README.md', 'LICENSE',
   'vercel.json', '.vercelignore', '.gitignore',
   '.github/workflows/ci.yml',
-  'scripts/check-i18n.mjs', 'scripts/check-assets.mjs', 'scripts/check-lang.mjs',
-  'scripts/gen-simp-chars.mjs', 'scripts/fetch-textures.sh',
 ];
+let scriptFiles = [];
+try {
+  scriptFiles = (await readdir(path.join(ROOT, 'scripts')))
+    .filter(f => f.endsWith('.mjs') || f.endsWith('.sh'))
+    .map(f => 'scripts/' + f);
+} catch { /* scripts/ 不存在: 不可能, 但與 plans/ 同一容錯 */ }
+SCAN.push(...scriptFiles);
 const SELF_EXCLUDE = new Set(['scripts/simp-chars.txt']);
 
 if (!existsSync(LIST)) {
