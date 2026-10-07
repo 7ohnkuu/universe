@@ -407,8 +407,51 @@ function applyWrapLighting(mat, wrap, extraPatch){
     }
     if (extraPatch) extraPatch(shader);
   };
-  mat.customProgramCacheKey = () => 'wrap' + wrap + (extraPatch ? '-night' : '');
+  // 快取鍵必須區分【不同的】extraPatch: 早期版一律回傳 '-night', 若木星差速自轉
+  // 與地球夜燈 wrap 值相同會共用同一個已編譯程式 (著色器張冠李戴)。
+  // 以 extraPatch.key 區分 (無 key 時退回 '-night' 保持相容)。
+  const patchKey = extraPatch ? '-' + (extraPatch.key || 'night') : '';
+  mat.customProgramCacheKey = () => 'wrap' + wrap + patchKey;
 }
+// 木星差速自轉 (differential rotation): 真實木星不是剛體 —— 赤道帶自轉週期
+// 9h50m (System I), 極區 9h55m (System II), 其間是交替的東/西向噴流 (zonal jets)。
+// 視覺實作: 剛體自轉 (mesh.rotation.y) 之上, 再依【緯度】對 map 的 u 座標加一個
+// 隨時間累積的剪切偏移 ⇒ 赤道跑在前、高緯滯後、噴流帶彼此滑動 —— 一眼就是「活」的木星。
+// 為何 patch map_fragment 而非幾何: 差速是紋理層現象, 動幾何會破壞球體與光照。
+// uDiffTime 由每幀 p._spin 餵入 (與自轉同源, 暫停即凍結); uDiffAmp 控制剪切幅度。
+function injectDifferentialRotation(shader){
+  shader.uniforms.uDiffTime = { value: 0 };
+  // uDiffAmp: 剪切幅度。真實木星赤道/極區自轉差 ≈ 0.85% (9h50m vs 9h55m),
+  // 但那是【每轉】的量, 且會隨時間累積 —— 每個緯度帶是水平的週期條紋,
+  // 沿 u 平移永遠不會「亂掉」(條紋只是橫向滑動), 故可略大於真實值以肉眼可見。
+  // 0.012 => 赤道每轉約超前極區 0.07 個紋理寬 (≈真實的 8x), 帶紋保持連貫,
+  // 大紅斑會在數十轉後緩慢漂移 —— 這正是「活」的木星。
+  shader.uniforms.uDiffAmp = { value: 0.012 };
+  const chunk = THREE.ShaderChunk.map_fragment;
+  if (!chunk.includes('texture2D( map, vMapUv )')){
+    console.warn(t('err.patchDiffuse'));   // r160 若改了取樣行名, 退回無差速 (不崩潰)
+    return;
+  }
+  const patched = chunk.replace('texture2D( map, vMapUv )',
+    'texture2D( map, vec2( vMapUv.x + uZonalOffset(vMapUv.y), vMapUv.y ) )');
+  const decl = `
+uniform float uDiffTime;
+uniform float uDiffAmp;
+float uZonalOffset(float v){
+  float lat = (v - 0.5) * 3.14159265;              // v=0.5 赤道 -> lat=0; 兩極 -> ±π/2
+  float w = 0.55 * (cos(lat) - 1.0);               // 赤道超轉 (w=0), 越高緯越滯後
+  w += 0.16 * sin(4.0 * lat);                      // 交替噴流: 相鄰帶反向剪切
+  return uDiffTime * w * uDiffAmp;
+}`;
+  if (!shader.fragmentShader.includes('#include <map_fragment>')){
+    console.warn(t('err.patchInclude'));
+    return;
+  }
+  shader.fragmentShader = decl + '\n' + shader.fragmentShader.replace('#include <map_fragment>', patched);
+  jupiterDiffShader = shader;                       // 供每幀更新 uDiffTime
+}
+injectDifferentialRotation.key = 'diff';
+let jupiterDiffShader = null;
 // 夜燈晨昏混合: 白天關燈, 夜面淡入 (edge 順序正確, 不用反向 smoothstep — 負向屬未定義行為)
 function injectNightLights(shader){
   shader.uniforms.uSunDirView = { value: new THREE.Vector3(0,0,1) };
@@ -823,7 +866,12 @@ async function upgradePlanet(p, mat, gen){
       if (mat.roughnessMap) mat.roughnessMap.dispose();
       if (mat.normalMap) mat.normalMap.dispose();
       mat.map = day; mat.roughnessMap = null; mat.color.set(0xffffff);
-      mat.normalMap = (p.name === '水星' || p.name === '火星') ? normalFromHeight(day.image, 3.0) : null;
+      // 高程導出法線貼圖: 水星/火星/冥王星都有真實地形起伏 (隕石坑/奧林帕斯山/
+      // 冥王星的水冰山脈與 Sputnik Planitia), 晨昏線附近立體感最明顯。
+      // (真實 LOLA/MOLA/New Horizons DEM 需網路, 本專案離線優先 => 以 albedo 亮度
+      //  梯度近似高程; 對無大氣、陰影即地形的天體, 這是標準且忠實的近似。)
+      mat.normalMap = (p.name === '水星' || p.name === '火星' || p.name === '冥王星')
+        ? normalFromHeight(day.image, 3.0) : null;
       if (mat.normalMap) mat.normalScale.set(0.8, 0.8);
       mat.needsUpdate = true; T.day = url;
     }
@@ -1071,7 +1119,9 @@ PLANETS.forEach((p, idx) => {
     ? new THREE.MeshPhysicalMaterial({ ...matParams, clearcoat: 0.25, clearcoatRoughness: 0.25 })
     : new THREE.MeshStandardMaterial(matParams);
   const wrapV = (p.type === 'gas' || p.type === 'ice') ? 0.2 : p.name === '地球' ? 0.12 : 0.08;
-  applyWrapLighting(mat, wrapV, p.name === '地球' ? injectNightLights : null);
+  // 地球: 夜燈 patch; 木星: 差速自轉 patch (兩者互斥, 同一顆行星不會同時需要)
+  const extra = p.name === '地球' ? injectNightLights : p.name === '木星' ? injectDifferentialRotation : null;
+  applyWrapLighting(mat, wrapV, extra);
   if (p.ring) applyRingShadow(mat, p, obj);   // 土星: 解析式環影 (取代鋸齒 shadow map)
   mat.envMapIntensity = (p.type === 'gas' || p.type === 'ice') ? 0.25 : p.name === '地球' ? 0.35 : 0.15;
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(p.rDisp, 64, 64), mat);
@@ -3088,6 +3138,16 @@ function updatePlanet(o, dt){
   if (w > MAX_SPD) w = MAX_SPD; else if (w < -MAX_SPD) w = -MAX_SPD;
   p._spin = (p._spin || 0) + dt * w;
   o.mesh.rotation.y = p._spin;
+  // 木星差速自轉: 剪切量與自轉同源 (用 p._spin, 不用 simTime) —— 兩者同比例,
+  // 暫停時同時凍結, 高速時同時受 MAX_SPD 限速 => 不會與地表剛體自轉脫拍。
+  if (jupiterDiffShader && p.name === '木星'){
+    jupiterDiffShader.uniforms.uDiffTime.value = p._spin;
+    // 差速偏移會使取樣 u 越出 [0,1] => 必須 RepeatWrapping, 否則條紋在接縫處被
+    // clamp 拉成直紋。放在每幀 (而非只在載入時) 是因為 reloadTextures/程序化降級
+    // 會重新指派 map; needsUpdate 只在 wrap 真的改變時設一次, 不觸發重上傳。
+    const mp = o.mesh.material.map;
+    if (mp && mp.wrapS !== THREE.RepeatWrapping){ mp.wrapS = THREE.RepeatWrapping; mp.needsUpdate = true; }
+  }
   // 冥王星–凱龍雙體: 潮汐互鎖 ⇒ 兩者自轉週期 = 公轉週期 = 6.387 天。
   // 實作: 旋轉 pivot (公轉) 即可, 兩球在 pivot 內【不自轉】 ⇒ 同一面永遠朝向對方。
   // 故冥王星本體不能再套用 o.mesh.rotation.y = p._spin (那會破壞互鎖) — 回退之。
