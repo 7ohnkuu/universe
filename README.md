@@ -3,10 +3,11 @@
 [![CI](https://github.com/7ohnkuu/universe/actions/workflows/ci.yml/badge.svg)](https://github.com/7ohnkuu/universe/actions/workflows/ci.yml)
 
 **太陽系 · 黑洞引力透鏡** — a real-time, browser-based solar system built on
-[three.js](https://threejs.org): eight planets on **true Keplerian orbits**
-(Kepler's equation solved every frame), plus an external black hole whose
+[three.js](https://threejs.org): eight planets plus **Pluto** on **true Keplerian
+orbits** (Kepler's equation solved every frame), plus an external black hole whose
 screen-space **gravitational-lensing shader** bends the starfield and the
-accretion disk behind it.
+accretion disk behind it. A switchable second scene adds the **TRAPPIST-1**
+exoplanet system with its real resonance chain.
 
 No build step, no framework, no bundler — three source files, served as static
 assets.
@@ -16,8 +17,13 @@ assets.
 </p>
 
 Live features: HDR bloom · point-light shadow casting · Earth's cloud layer,
-ocean specular and night-side city lights · Saturn's rings · the Moon ·
-click-to-fly-and-track · zh-TW / English UI.
+ocean specular, night-side city lights and **lightning** · Saturn's rings with
+**analytic ring shadow** and **view-dependent brightness** · the Moon and the
+galilean/Saturnian moons · a **Pluto–Charon binary** orbiting a shared barycenter
+· a **main-belt + Kuiper-belt GPU particle field** with real Kirkwood gaps ·
+**Jupiter differential rotation** · **two-wavelength Rayleigh** atmospheres ·
+**axis-tilt indicators** · an honest **8k fallback badge** · click-to-fly-and-track
+· zh-TW / English UI · switchable **TRAPPIST-1** system.
 
 | Saturn, seen near pole-on: ring system and polar region | Mars, terminator crossing the disc |
 |---|---|
@@ -37,6 +43,10 @@ click-to-fly-and-track · zh-TW / English UI.
 - [The Dyson shell](#the-dyson-shell)
 - [The wormhole](#the-wormhole)
 - [Moons, and a comet](#moons-and-a-comet)
+- [Pluto–Charon binary](#plutocharon-binary)
+- [Asteroid belt and Kuiper belt](#asteroid-belt-and-kuiper-belt)
+- [TRAPPIST-1: a second system](#trappist-1-a-second-system)
+- [Planet-shading upgrades](#planet-shading-upgrades)
 - [Project layout](#project-layout)
 - [Textures](#textures)
 - [Internationalization](#internationalization)
@@ -276,10 +286,14 @@ and legend retract on touch devices too.
 |---|---|
 | Space | Pause / resume |
 | `[` `]` | Speed down / up |
-| `1`–`8` | Fly to Mercury…Neptune |
+| `1`–`8` | Fly to Mercury…Neptune (in TRAPPIST mode, `1`–`7` fly to its planets) |
+| `P` | Fly to Pluto |
 | `0` / `9` | Fly to the Sun / the black hole |
 | `R` | Reset the view |
 | `L` `O` `B` `G` | Toggle labels / orbits / black hole / lensing |
+| `A` | Toggle the asteroid & Kuiper belts |
+| `C` | Fly to the comet |
+| `S` | Switch system (Solar System ⇄ TRAPPIST-1) |
 | `D` | Toggle the Dyson shell |
 
 Every shortcut calls the same handler as the corresponding button, so the two
@@ -496,6 +510,10 @@ Moon textures are **NASA/JPL public-domain imagery** (US government work):
 Ganymede uses a true equirectangular global map (PIA03781); Titan a true
 equirectangular radar map (PIA19658, cropped of its title and axes); Io, Europa
 and Callisto use full-disc mosaics (PIA00292 centre disc, PIA00016, PIA00457).
+Pluto and Charon are NASA **New Horizons** public-domain equirectangular map
+mosaics (via Wikimedia Commons), regenerated offline by
+`scripts/gen-pluto-textures.mjs`. Like the moons, these single-resolution maps
+(no `2k_`/`4k_`/`8k_` variants) resolve to the same file at every tier.
 
 A full disc is an orthographic view, not an equirectangular map, so it cannot
 be wrapped onto a sphere directly. The conversion runs at load time: a
@@ -514,17 +532,133 @@ existed (Ganymede, Titan) it is used unmodified apart from polar relaxation.
 
 ---
 
+## Pluto–Charon binary
+
+Pluto is the ninth body on a true Keplerian orbit (a = 39.5 AU, e = 0.2488,
+i = 17.16°) — its high eccentricity and inclination are exactly what sets it
+apart from the eight planets. It is not modelled as "planet plus moon": Pluto
+and Charon orbit a **shared barycenter**, and because Charon is unusually
+massive (M<sub>Charon</sub>/M<sub>Pluto</sub> = 0.1217) that barycenter sits
+**outside Pluto's surface** — 1.79 Pluto radii from its centre. A line and a
+marker are drawn at the barycenter so the point is visible, not just asserted.
+
+Both bodies are **mutually tidally locked**: each always shows the same face to
+the other (spin period = orbital period = 6.387 days). This is implemented by
+rotating a shared `pivot` while neither sphere spins within it, so the facing is
+exact by construction. A headless check confirms the dot product of Pluto's
+body-fixed +X axis with the direction to Charon stays at 1.0 across many orbits.
+
+The separation is drawn at the real ratio (19640 km / 1188 km ≈ 16.5 Pluto
+radii), so the geometry is faithful even though the absolute scale is
+compressed like everything else. Charon uses the same equirectangular pipeline
+as the moons: polar relaxation plus a normal map derived from height. Pluto has
+a faint blue **haze** layer (the nitrogen atmosphere New Horizons detected in
+backlight). The textures are NASA New Horizons public-domain map mosaics,
+regenerated offline by `scripts/gen-pluto-textures.mjs`; both source mosaics
+have an un-imaged south pole that the script fills by gradient interpolation
+(same philosophy as `scripts/fix-saturn-pole.mjs`).
+
+---
+
+## Asteroid belt and Kuiper belt
+
+Two `gl.POINTS` fields (main belt 46k, Kuiper belt 30k on desktop; halved on
+coarse-pointer / low-core devices). Every particle's position is solved **in the
+vertex shader** from its own orbital elements, so the CPU writes only one
+`uTime` per frame — 76k bodies cost two draw calls. Each has its own
+semi-major axis, eccentricity, inclination, three orientation angles and phase,
+so the belts show **differential rotation** (inner faster than outer), which is
+exactly what makes them read as a *belt* rather than a rigid ring. A headless
+check measures an inner particle sweeping 0.895 rad in 0.5 yr against an outer
+one sweeping 0.396 rad — Kepler's third law, with the small deviation from mean
+motion confirming eccentric (not circular) solving.
+
+The semi-major-axis distribution is **not uniform**. It is rejection-sampled
+from the real profile: a main-belt peak near 2.7 AU, the Cybele and Hilda 3:2
+groups, and — most recognisably — the **Kirkwood gaps** where Jupiter's mean
+motion resonances sweep orbits clear. Resonance radii follow a = a<sub>J</sub>
+(q/p)^(2/3): 3:1 @ 2.50, 5:2 @ 2.83, 7:3 @ 2.96, 2:1 @ 3.28 AU. A headless
+audit confirms each gap holds only 0.31–0.54× the density of its equal-width
+neighbours. The Kuiper belt carries the Plutino 2:3 peak at 39.4 AU (where
+Pluto actually is) and the 1:2 peak at 47.8 AU, with a sharp cliff beyond 50 AU.
+
+Like the stars, belt particles are held **below the bloom threshold** (the same
+rule that fixed the "planet flicker" bug): additive blending at low alpha means
+dense regions accumulate into a faint hazy band while no single particle enters
+the HDR bloom chain. A paused-frame test measures 0.0 static flicker and the
+bloom high-pass reports 0 pixels above threshold with only the belt visible.
+
+---
+
+## TRAPPIST-1: a second system
+
+A switchable scene (panel "System" dropdown or the `S` key) replaces the solar
+system with the **TRAPPIST-1** exoplanetary system — seven Earth-sized planets
+orbiting an M8V red dwarf. Both systems share one `scene`/`camera`/`composer`
+but only one is visible at a time; switching hides the other's groups, its
+CSS2D labels (which do not respect ancestor visibility, so each is toggled
+individually), disables the lensing post-passes, rebuilds the focus dropdown and
+resets the camera.
+
+The star is drawn at its real character: 2566 K, so a deep orange-red (its
+radius is barely 19% larger than Jupiter's). Orbital periods are the measured
+values from Agol et al. 2021, which makes the **resonance chain** emerge on its
+own rather than being hand-tuned — consecutive period ratios come out 8:5, 5:3,
+3:2, 3:2, 4:3, 3:2, all within 1.3% of the integers (verified numerically). All
+planets are **tidally locked**, so each keeps one face on the star. The M-dwarf
+**flares** are driven by a deterministic envelope over simulation time (not
+per-frame `Math.random()`), so they read as brief brightenings rather than
+high-frequency noise. JWST found no substantial atmosphere on planet b, so — in
+keeping with this project's preference for honesty over prettiness — the
+planets are shown as bare rock with no fabricated airglow.
+
+---
+
+## Planet-shading upgrades
+
+- **Normal maps** for Mercury, Mars, the Moon and now Pluto, derived from the
+  albedo height (`normalFromHeight`). True LOLA/MOLA/New Horizons DEMs need the
+  network; since this project is offline-first, the albedo gradient is used as a
+  standard, faithful proxy for airless bodies where shadow *is* terrain.
+- **Jupiter differential rotation**: a `map_fragment` patch adds a
+  latitude-dependent u-offset that accumulates with spin, so the equator leads
+  the poles and the zonal jets shear past each other. The offset pushes u past
+  1, so Jupiter's map is forced to `RepeatWrapping`. A headless test shows
+  equatorial rows shifting −12 px while polar rows stay put.
+- **Earth night-side lightning**: a recycled sprite pool flashes only where the
+  cloud-frame sun direction is below the horizon, with a deterministic
+  multi-strike decay envelope. Peak contribution stays under the bloom threshold.
+- **Two-wavelength Rayleigh atmospheres** on Earth and Venus: limb colour now
+  depends on the solar angle (∝ λ⁻⁴ extinction through an air-mass that grows
+  toward the terminator), so the limb turns orange-red at sunset while staying
+  bright. Overhead stays blue; a numeric sweep of the exact shader formula
+  confirms the hue tracks solar angle.
+- **Axis-tilt indicators**: focusing a planet draws its rotation axis (with a
+  north-pole arrow), its equatorial-plane disc, and a dashed orbital-normal
+  reference whose angle to the axis *is* the axial tilt. It attaches to the
+  tilt-only group (not the spinning mesh, and not Pluto's orbiting holder), and
+  renders as a depth-independent overlay so nothing hides it. The measured tilt
+  matches the data exactly (Earth 23.44°, Uranus 97.77°).
+- **Honest 8k badge**: 8k textures are not shipped (see `.gitignore`); selecting
+  8k without downloading them used to fall back silently. Now a failed load is
+  recorded, and the panel shows "8k ⚠" with a note pointing at
+  `scripts/fetch-textures.sh` instead of pretending 8k is active.
+
+---
+
 ## Project layout
 
 ```
 .
 ├── index.html                 markup + all CSS + boot/error watchdog (inline)
-├── main.js                    the entire scene, ~1.4k lines, one ES module
+├── main.js                    the entire scene (both systems), one ES module
 ├── i18n.js                    zh-TW / English dictionary (classic script, see below)
 ├── vercel.json                static-host config: no framework, cache rules
 ├── .vercelignore              keeps the untracked 8k maps out of a CLI deploy
 ├── scripts/
 │   ├── fetch-textures.sh      downloads + SHA-256-verifies the 8k maps
+│   ├── fix-saturn-pole.mjs    offline, idempotent fix for Saturn's pole artifact
+│   ├── gen-pluto-textures.mjs offline: build pluto.jpg / charon.jpg from NH mosaics
 │   ├── check-lang.mjs         CI: prose/comments must be Traditional Chinese
 │   ├── check-i18n.mjs         CI: dictionary keys must match across languages
 │   ├── check-assets.mjs       CI: referenced textures must exist
