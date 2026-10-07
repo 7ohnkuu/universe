@@ -13,7 +13,7 @@ No build step, no framework, no bundler — three source files, served as static
 assets.
 
 <p align="center">
-  <img src="docs/screenshots/overview.jpg" alt="Full system: eight Keplerian orbits around a bloomed Sun, with the black hole at right" width="900">
+  <img src="docs/screenshots/overview.jpg" alt="Full system: nine Keplerian orbits around a bloomed Sun, the asteroid belt, and the black hole at right" width="900">
 </p>
 
 Live features: HDR bloom · point-light shadow casting · Earth's cloud layer,
@@ -22,12 +22,21 @@ ocean specular, night-side city lights and **lightning** · Saturn's rings with
 galilean/Saturnian moons · a **Pluto–Charon binary** orbiting a shared barycenter
 · a **main-belt + Kuiper-belt GPU particle field** with real Kirkwood gaps ·
 **Jupiter differential rotation** · **two-wavelength Rayleigh** atmospheres ·
-**axis-tilt indicators** · an honest **8k fallback badge** · click-to-fly-and-track
-· zh-TW / English UI · switchable **TRAPPIST-1** system.
+**axis-tilt indicators** · an honest **8k fallback badge** · an exact
+**wormhole microlensing light curve** · click-to-fly-and-track · zh-TW / English
+UI · switchable **TRAPPIST-1** system.
+
+| The main asteroid belt, seen from above: Kirkwood gaps at Jupiter's resonances | TRAPPIST-1: seven planets on a real resonance chain around an M8V red dwarf |
+|---|---|
+| <img src="docs/screenshots/belt.jpg" alt="Overhead view of the asteroid belt: a broad ring of particles with depleted gaps" width="420"> | <img src="docs/screenshots/trappist.jpg" alt="TRAPPIST-1: a dim orange-red dwarf star with seven orbiting planets" width="420"> |
 
 | Saturn, seen near pole-on: ring system and polar region | Mars, terminator crossing the disc |
 |---|---|
 | <img src="docs/screenshots/saturn.jpg" alt="Saturn seen from near its pole, ring system forming concentric circles around the disc" width="420"> | <img src="docs/screenshots/mars.jpg" alt="Mars, lit crescent falling off into night side" width="420"> |
+
+| The Pluto–Charon binary: both bodies orbit a barycenter outside Pluto | Wormhole microlensing: the star brightens, then **dims** below baseline |
+|---|---|
+| <img src="docs/screenshots/pluto.jpg" alt="Pluto and Charon separated by their mutual barycenter" width="420"> | <img src="docs/screenshots/lightcurve.jpg" alt="Control panel with the wormhole light curve plotted against time" width="420"> |
 
 ---
 
@@ -162,7 +171,10 @@ The shader displaces screen-space UVs as a function of the impact parameter
 relative to the black hole's projected position, which produces the three
 signatures you actually expect:
 
-- **the shadow** — a true dead zone where nothing is sampled;
+- **the shadow** — the pass deliberately *passes through* inside `bhRadius` and
+  samples normally there; the black disc comes from a 3D pure-black horizon
+  sphere in the scene, so occlusion has correct depth and never eats the near
+  side of the disk in front of it;
 - **the photon ring** — a narrow, bright Gaussian ring at ≈1.06× the apparent
   horizon radius, from light that skimmed the photon sphere;
 - **the lensed far side of the disk** — the back of the accretion disk is
@@ -175,15 +187,15 @@ that happen to fall behind it, not just the disk.
 The black hole's screen position and apparent radius are re-derived each frame
 by projecting its world position, and the strength uniform is forced to zero
 unless the projection **succeeded this frame**. That guard is not pedantry: the
-center of a black hole is, by definition, a region that produces no sample, so
-reusing last frame's `bhUV` when the current projection fails (behind the
-camera, or off-screen) leaves a photon ring floating over empty space. That
-regression was reproduced and confirmed before the guard went in — hence the
-explicit "only if projected this frame" condition rather than a plain smooth
-ramp.
+pass draws the photon ring at a fixed radius around `bhUV`, so reusing last
+frame's `bhUV` when the current projection fails (behind the camera, or
+off-screen) leaves a photon ring floating over empty space where no hole is.
+That regression was reproduced and confirmed before the guard went in — hence
+the explicit "only if projected this frame" condition rather than a plain
+smooth ramp.
 
 <p align="center">
-  <img src="docs/screenshots/lensing.jpg" alt="Approaching the black hole: the shadow, the photon ring, and the accretion disk lensed over the top" width="900">
+  <img src="docs/screenshots/lensing.jpg" alt="Approaching the black hole: the lensed accretion disk and its HDR bloom, with the screen-space deflection warping the starfield behind it" width="900">
 </p>
 
 The composer renders into its own `WebGLRenderTarget` with `samples: 4`,
