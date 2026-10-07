@@ -496,6 +496,7 @@ function injectNightLights(shader){
   earthNightShader = shader; // 供每幀更新 uSunDirView
 }
 let earthNightShader = null;
+let earthLightning = null;   // 地球夜面閃電系統 (每幀需知道雲層框架下的太陽方向)
 // 域扭曲 fbm (湍流感更自然)
 function warpFbm(n, x, y, oct){
   const q = fbm(n, x, y, oct);
@@ -637,6 +638,80 @@ function addAtmosphere(radius, color, power, ownerObj){
   });
   atmoMats.push({ mat, obj: ownerObj });
   return new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 48), mat);
+}
+
+// =============================================================================
+//  地球夜面閃電 (lightning)
+//
+//  真實地球每時每刻約有 1500–2000 場雷暴、每秒 ~44 次閃電, 但只有【夜面】的
+//  能被看見 (日面被陽光浹沒)。實作: 一個小 sprite 池 (循環重用) + 隨機排程,
+//  成本極低 (共用 glow 貼圖、additive、無新貼圖), 效果顯著。
+//
+//  兩個「必須隨機」的層次不同:
+//   · 【觸發排程與位置】用 Math.random() —— 閃電本就是隨機事件, 且每次閃光
+//     只活 ~0.2s, 不會變成持續頻閃 (與 TRAPPIST 耀斑相反: 那是緩變物理量,
+//     必須決定性, 否則每幀重抽會變高頻噪訊)。
+//   · 【強度包絡】用確定性 exp 衰減 × 正弦抖動: 極快上升 + 多次子閃 + 指數衰減,
+//     這才是真實閃電的樣子 (不是一次平滑的淡入淡出)。
+// =============================================================================
+function makeLightning(hostObj, radius){
+  const N = 8;                                  // sprite 池 (同時最多 8 道閃)
+  const group = new THREE.Group();
+  const tex = makeGlowTexture();
+  const flashes = [];
+  for (let i = 0; i < N; i++){
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, color: 0xd8ecff, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false }));
+    s.visible = false;
+    group.add(s);
+    flashes.push({ sprite: s, t: -1, life: 0, seed: Math.random() * TWO_PI });
+  }
+  hostObj.add(group);
+  const state = { group, flashes, radius, host: hostObj, timer: 0, next: 0.15, sunDirLocal: new THREE.Vector3(0,0,1) };
+  return state;
+}
+const _lgDir = new THREE.Vector3();
+const _lgQ = new THREE.Quaternion();
+function lightningTrigger(st){
+  const f = st.flashes.find(x => x.t < 0);       // 找一個空閒的
+  if (!f) return;
+  // 在夜半球隨機取點: sunDirLocal 指向日面中心, 故夜面 = dot(dir, sun)<0
+  const sun = st.sunDirLocal;
+  let ok = false;
+  for (let k = 0; k < 12; k++){
+    _lgDir.set(Math.random()*2-1, Math.random()*2-1, Math.random()*2-1);
+    if (_lgDir.lengthSq() < 1e-6) continue;
+    _lgDir.normalize();
+    if (_lgDir.dot(sun) < -0.15){ ok = true; break; }
+  }
+  if (!ok) _lgDir.copy(sun).negate();            // 保底: 直接取反日點
+  f.sprite.position.copy(_lgDir).multiplyScalar(st.radius * 1.005);  // 雲頂高度
+  f.t = 0; f.life = 0.16 + Math.random() * 0.14; f.seed = Math.random() * TWO_PI;
+  f.sprite.visible = true;
+}
+function lightningUpdate(st, dt){
+  if (!st) return;
+  // 觸發排程: 隨機間隔 (0.08–0.5s), 平均每秒數次 —— 肉眼可見但不噎目
+  st.timer += dt;
+  if (st.timer >= st.next){
+    st.timer = 0;
+    st.next = 0.08 + Math.random() * 0.42;
+    lightningTrigger(st);                        // 偶爾一次雙閃 (鄰近雲團)
+    if (Math.random() < 0.25) lightningTrigger(st);
+  }
+  for (const f of st.flashes){
+    if (f.t < 0) continue;
+    f.t += dt;
+    const u = f.t / f.life;
+    if (u >= 1){ f.t = -1; f.sprite.visible = false; f.sprite.material.opacity = 0; continue; }
+    // 包絡: 快速上升 (u<0.08) + 抖動 (2–3 次子閃) + 指數衰減
+    const rise = smooth(0.0, 0.08, u);            // 用已定義在前的 smooth (同簽名), 免前向引用
+    const flicker = Math.max(0, Math.sin(u * Math.PI * (5 + (f.seed % 3))));
+    const env = rise * Math.exp(-u * 3.5) * (0.45 + 0.55 * flicker);
+    f.sprite.material.opacity = Math.min(1, env);
+    f.sprite.scale.setScalar(st.radius * (0.5 + 0.45 * u));
+  }
 }
 
 // 夜光貼圖: specular(海洋白)反相得陸地遮罩, 乘 fbm 群聚斑點, 極區衰減
@@ -1236,6 +1311,9 @@ PLANETS.forEach((p, idx) => {
     obj.add(clouds); p._clouds = clouds;
     clouds.castShadow = true; // alphaTest>0 -> r160 自動以 map/alphaMap 生成 distance 變體, 雲影不再是實心球
     atmoParent.add(addAtmosphere(p.rDisp * 1.03, 0x3a7bd5, 2.5, atmoParent));
+    // 夜面閃電: 掛在雲層 (隨雲自轉) 上, sprite 池循環重用
+    p._lightning = makeLightning(clouds, p.rDisp * 1.012);
+    earthLightning = p._lightning;
   } else if (p.name === '金星') {
     atmoParent.add(addAtmosphere(p.rDisp * 1.05, 0xd9b06a, 2.5, atmoParent));
   } else if (p.name === '火星') {
@@ -3355,6 +3433,19 @@ function animate(){
     o.obj.getWorldPosition(_sv);                     // 復用 _sv 暫存 (下方未再用它)
     const ph = ringPhaseAngle(_sv, camera.position);
     o.data._ringBrightU.value = ringBrightness(ph);
+  }
+
+  // 地球夜面閃電 (僅太陽系模式): 需把「地球→太陽」的世界方向換算進雲層【區域】
+  // 框架 (sprite 位置在雲層區域座標), 才能判定哪些點在夜面。雲層隨自轉,
+  // 故區域太陽方向每幀變 —— 這正是「夜面隨自轉移動」的物理。
+  if (earthLightning && planetObjs[2].data._clouds){
+    const clouds = planetObjs[2].data._clouds;
+    clouds.getWorldPosition(_sv);                    // 雲層世界座標 (= 地球位置)
+    _sv.negate().normalize();                        // 地球 -> 太陽 (太陽在世界原點)
+    clouds.getWorldQuaternion(_lgQ);
+    _sv.applyQuaternion(_lgQ.invert());              // 世界方向 -> 雲層區域方向
+    earthLightning.sunDirLocal.copy(_sv);
+    lightningUpdate(earthLightning, simDt);
   }
 
   // 引力透鏡: 投影黑洞到螢幕空間; 強度平滑 (L12), 且僅在黑洞「本幀確實可投影」時輸出,
