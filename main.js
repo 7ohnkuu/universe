@@ -279,6 +279,22 @@ function makeGlowTexture() {
   ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
+// 實心圓點紋理 (給 sprite 用): 圓形且邊緣柔和。
+// 為何不用 SphereGeometry: 低段數球放大會露出【方形稜角】(冥王星質心標記曾如此),
+// 高段數又浪費; sprite 是永遠面向相機的 billboard, 任何距離/角度都是圓的。
+function makeDotTexture() {
+  const s = 64, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const ctx = cv.getContext('2d');
+  const g = ctx.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.55, 'rgba(255,255,255,1)');
+  g.addColorStop(0.85, 'rgba(255,255,255,0.55)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+let _dotTex = null;                 // 共用一張圓點紋理 (所有質心標記)
+function dotTexture() { return _dotTex || (_dotTex = makeDotTexture()); }
 
 // =============================================================================
 //  程序化行星貼圖 (value-noise fbm, 離線生成)
@@ -1390,13 +1406,20 @@ PLANETS.forEach((p, idx) => {
     // 質心連線 + 質心標記: 直觀顯示「質心不在冥王星內」 (教學價值)
     const lineGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-dP, 0, 0), new THREE.Vector3(dC, 0, 0) ]);
-    pivot.add(new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0x8899bb, transparent: true, opacity: 0.4 })));
-    const bary = new THREE.Mesh(new THREE.SphereGeometry(Math.max(p.rDisp * 0.12, 0.05), 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffd9a0 }));
+    const connLine = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0x8899bb, transparent: true, opacity: 0.4 }));
+    connLine.visible = false;                 // 只在聚焦冥王星時顯示 (見 syncAxisIndicators)
+    pivot.add(connLine);
+    // 質心標記用 sprite (圓形 billboard), 不用低多邊形球 —— 後者放大會露出方形稜角。
+    const bary = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: dotTexture(), color: 0xffd9a0, transparent: true,
+      depthWrite: false, sizeAttenuation: true }));
+    const baryScale = Math.max(p.rDisp * 0.42, 0.07);   // sprite scale = 顯示直徑 (冥王星半徑的 ~0.42 倍, 是個清楚的小點而非大塊)
+    bary.scale.set(baryScale, baryScale, 1);
+    bary.visible = false;                     // 同樣只在聚焦冥王星時顯示
     pivot.add(bary);
     p._upgC = upgradeBinary(cMesh, p, texGen);
     bin = { pivot, plutoHolder, charonHolder, mesh, cMesh, cMat, sep, dP, dC, q,
-            periodYr: bd.periodD / 365.25, angle: 0, bary };
+            periodYr: bd.periodD / 365.25, angle: 0, bary, connLine, baryScale };
   } else {
     obj.add(mesh);
   }
@@ -2282,7 +2305,12 @@ function syncAxisIndicators(){
   const s = SYSTEM === 'solar';
   // 開關關閉 => 一律全隱 (即使有聚焦)。否則只在【太陽系模式】且【聚焦某行星】時顯示該行星。
   const focused = (s && showAxis && followIdx >= 0 && followIdx < planetObjs.length) ? followIdx : -1;
-  planetObjs.forEach((o, i) => { if (o.axis) o.axis.visible = (i === focused); });
+  planetObjs.forEach((o, i) => {
+    if (o.axis) o.axis.visible = (i === focused);
+    // 雙體 (冥王星–凱龍) 的質心標記與連線: 同屬「指示 overlay」, 只在聚焦冥王星
+    // 且開關開啟時顯示 —— 否則遠看太陽系時會在冥王星旁杵著一個白點 + 線, 像雜訊。
+    if (o.bin){ o.bin.bary.visible = (i === focused); o.bin.connLine.visible = (i === focused); }
+  });
 }
 // 焦點選單: 前 5 個靜態選項 (自由/太陽/黑洞/蟲洞/彗星) 常駐 index.html;
 // 尾端依系統重建 (太陽系行星 或 TRAPPIST 天體)。
