@@ -2280,7 +2280,8 @@ function syncSystemLabels(){
 // TRAPPIST 模式的行星索引 ≥100, 不在 planetObjs 範圍 => 全部隱藏。
 function syncAxisIndicators(){
   const s = SYSTEM === 'solar';
-  const focused = s && followIdx >= 0 && followIdx < planetObjs.length ? followIdx : -1;
+  // 開關關閉 => 一律全隱 (即使有聚焦)。否則只在【太陽系模式】且【聚焦某行星】時顯示該行星。
+  const focused = (s && showAxis && followIdx >= 0 && followIdx < planetObjs.length) ? followIdx : -1;
   planetObjs.forEach((o, i) => { if (o.axis) o.axis.visible = (i === focused); });
 }
 // 焦點選單: 前 5 個靜態選項 (自由/太陽/黑洞/蟲洞/彗星) 常駐 index.html;
@@ -2476,6 +2477,10 @@ composer.addPass(new OutputPass());
 let simSpeed = 0.2;          // 年 / 秒
 let paused = false;
 let showOrbits = true, showLabels = true, lensOn = true, bhOn = true;
+// 軸傾指示器開關。預設開, 但偏好記在 localStorage (與 📌 鈎選同一哲學):
+// 使用者關掉一次, 下次造訪就保持關閉 —— 否則每次重新整理又冒出來很煩。
+let showAxis = true;
+try { showAxis = localStorage.getItem('universe.showAxis') !== '0'; } catch (e) { /* 隱私模式: 用預設 */ }
 let followIdx = -1;
 // 場景切換: 'solar' = 太陽系 (預設), 'trap' = TRAPPIST-1。兩套座標/時間尺度不同,
 // 同一畫面只顯示一套 (另一套 group.visible=false); 切換時重置相機與追蹤。
@@ -2564,6 +2569,7 @@ addEventListener('keydown', e => {
       const sel = $('system'); sel.value = sel.value === 'solar' ? 'trap' : 'solar';
       sel.dispatchEvent(new Event('change', { bubbles: true }));   // 沿用既有 handler (不另寫一套狀態邏輯)
       break; }
+    case 'x': case 'X': e.preventDefault(); $('tAxis').click(); break;  // 軸傾指示器
   }
 });
 
@@ -2777,6 +2783,15 @@ $('tBelt').addEventListener('click', e => {
   if (beltOn) beltGroup.visible = true;
   fadeTo('belt', v => { for (const m of beltMats) m.uniforms.uOpacity.value = v; }, cur, beltOn ? 1 : 0, 180,
     () => { if (!beltOn) beltGroup.visible = false; });
+});
+// 軸傾指示器開關: 只影響「聚焦某行星時是否畫出軸/赤道盤/軌道法線」。
+// 與軌道線/標籤/小行星帶同一列, 補上先前唯一缺少開關的視覺層。
+// 開關狀態記住 (localStorage): 關掉一次, 下次造訪保持關閉。
+$('tAxis').addEventListener('click', e => {
+  showAxis = !showAxis; e.target.classList.toggle('on', showAxis);
+  e.target.setAttribute('aria-pressed', String(showAxis));
+  try { localStorage.setItem('universe.showAxis', showAxis ? '1' : '0'); } catch (err) { /* 忽略 */ }
+  syncAxisIndicators();   // 立即生效: 關 => 全隱; 開 => 若正聚焦某行星則顯示它
 });
 let labelsHideTimer = 0;
 $('tLabels').addEventListener('click', e => {
@@ -3665,6 +3680,13 @@ renderDynamicUI(); // 初始同步: index.html 的預置文字一律是中文, �
 // 必須在 renderDynamicUI() 之後: 兩者都操作 focusSelect, 順序一致才不會互蓋。
 rebuildFocusTail();
 syncSystemLabels();
+// 軸傾指示器按鈕的初始外觀: 必須與 localStorage 讀出的 showAxis 同步
+// (HTML 寫死 on/aria-pressed=true, 但若上次關掉過, showAxis=false, 這裡要正回來)。
+syncAxisIndicators();
+{
+  const ta = $('tAxis');
+  if (ta){ ta.classList.toggle('on', showAxis); ta.setAttribute('aria-pressed', String(showAxis)); }
+}
 
 // 啟動: 等初始貼圖批次載入完成再淡出載入覆蓋層 (M4)
 window.__universeReady = true;

@@ -56,6 +56,7 @@
       'btn.orbits': '軌道線',
       'btn.labels': '名稱',
       'btn.belt': '小行星帶',
+      'btn.axis': '軸傾指示',
       'btn.lens': '引力透鏡',
       'btn.bh': '黑洞',
       'btn.wh': '蟲洞',
@@ -95,7 +96,7 @@
       'loader.tex': '載入中 · 貼圖 {done}/{total}',
       'loader.texBytes': '載入中 · 貼圖 {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': '載入進度',
-      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · P 冥王星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼 · W 蟲洞 · C 彗星 · A 小行星帶 · S 切換系統',
+      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · P 冥王星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼 · W 蟲洞 · C 彗星 · A 小行星帶 · X 軸傾指示 · S 切換系統',
 
       'label.bh': '黑洞 (引力透鏡)',
       'opt.bh': '黑洞',
@@ -158,6 +159,7 @@
       'btn.orbits': 'Orbits',
       'btn.labels': 'Labels',
       'btn.belt': 'Asteroid belt',
+      'btn.axis': 'Axis tilt',
       'btn.lens': 'Lensing',
       'btn.bh': 'Black hole',
       'btn.wh': 'Wormhole',
@@ -198,7 +200,7 @@
       'loader.tex': 'Loading · textures {done}/{total}',
       'loader.texBytes': 'Loading · textures {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': 'Loading progress',
-      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · P Pluto · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell · W wormhole · C comet · A asteroid belt · S switch system',
+      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · P Pluto · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell · W wormhole · C comet · A asteroid belt · X axis tilt · S switch system',
 
       'label.bh': 'Black hole (lensing)',
       'opt.bh': 'Black hole',

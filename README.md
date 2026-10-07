@@ -292,6 +292,7 @@ and legend retract on touch devices too.
 | `R` | Reset the view |
 | `L` `O` `B` `G` | Toggle labels / orbits / black hole / lensing |
 | `A` | Toggle the asteroid & Kuiper belts |
+| `X` | Toggle the axis-tilt indicator |
 | `C` | Fly to the comet |
 | `S` | Switch system (Solar System ⇄ TRAPPIST-1) |
 | `D` | Toggle the Dyson shell |
@@ -638,7 +639,9 @@ planets are shown as bare rock with no fabricated airglow.
   reference whose angle to the axis *is* the axial tilt. It attaches to the
   tilt-only group (not the spinning mesh, and not Pluto's orbiting holder), and
   renders as a depth-independent overlay so nothing hides it. The measured tilt
-  matches the data exactly (Earth 23.44°, Uranus 97.77°).
+  matches the data exactly (Earth 23.44°, Uranus 97.77°). Only the **focused**
+  body shows one (never all at once), and the "Axis tilt" button / `X` key turns
+  the whole layer off; the choice is remembered in `localStorage`.
 - **Honest 8k badge**: 8k textures are not shipped (see `.gitignore`); selecting
   8k without downloading them used to fall back silently. Now a failed load is
   recorded, and the panel shows "8k ⚠" with a note pointing at
