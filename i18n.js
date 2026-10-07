@@ -29,8 +29,16 @@
       'grp.view': '視角',
       'grp.display': '顯示',
 
+      'grp.system': '系統',
+      'sys.select': '星際系統',
+      'sys.solar': '太陽系',
+      'sys.trap': 'TRAPPIST-1 (系外共振鏈)',
+      'trap.star': 'TRAPPIST-1 (紅矮星)',
+      'trap.note': '★ 7 顆地球大小行星繞一顆 M8V 紅矮星 (Teff 2566 K, 半徑僅比木星大 19%)。相鄰週期比構成完整共振鏈 8:5·5:3·3:2·3:2·4:3·3:2 (Agol 2021, 偏差 <1.3%), 時間拉長即可見共振。行星全部潮汐鎖定 (一面永書、一面永夜); JWST 對 b 星未發現實質大氣, 故以裸岩世界呈現。恆星有 M 矮星典型的偶發耀斑。',
+
       'sim.speed': '時間流速',
       'unit.yrPerSec': '{v} 年/秒',
+      'unit.dayPerSec': '{v} 天/秒',
       'btn.pause': '⏸ 暫停',
       'btn.play': '▶ 播放',
 
@@ -85,7 +93,7 @@
       'loader.tex': '載入中 · 貼圖 {done}/{total}',
       'loader.texBytes': '載入中 · 貼圖 {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': '載入進度',
-      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · P 冥王星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼 · W 蟲洞 · C 彗星 · A 小行星帶',
+      'ui.keys': '鍵盤：空白 暫停 · [ ] 調速 · 1–8 行星 · P 冥王星 · 0 太陽 · 9 黑洞 · R 重置 · L 名稱 · O 軌道 · B 黑洞 · G 透鏡 · D 戴森殼 · W 蟲洞 · C 彗星 · A 小行星帶 · S 切換系統',
 
       'label.bh': '黑洞 (引力透鏡)',
       'opt.bh': '黑洞',
@@ -121,8 +129,16 @@
       'grp.view': 'CAMERA',
       'grp.display': 'DISPLAY',
 
+      'grp.system': 'SYSTEM',
+      'sys.select': 'Star system',
+      'sys.solar': 'Solar System',
+      'sys.trap': 'TRAPPIST-1 (exoplanet resonance chain)',
+      'trap.star': 'TRAPPIST-1 (red dwarf)',
+      'trap.note': '★ Seven Earth-sized planets orbit an M8V red dwarf (Teff 2566 K, radius barely 19% larger than Jupiter). The consecutive period ratios form a complete resonance chain 8:5·5:3·3:2·3:2·4:3·3:2 (Agol 2021, deviation <1.3%) — run time long enough and the commensurability appears. All planets are tidally locked (one side in perpetual day, one in night); JWST found no substantial atmosphere on b, so they are shown as bare rock. The star shows the flares typical of M dwarfs.',
+
       'sim.speed': 'Time speed',
       'unit.yrPerSec': '{v} yr/s',
+      'unit.dayPerSec': '{v} day/s',
       'btn.pause': '⏸ Pause',
       'btn.play': '▶ Play',
 
@@ -178,7 +194,7 @@
       'loader.tex': 'Loading · textures {done}/{total}',
       'loader.texBytes': 'Loading · textures {done}/{total} · {mb}/{mbTotal} MB · {pct}%',
       'loader.bar': 'Loading progress',
-      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · P Pluto · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell · W wormhole · C comet · A asteroid belt',
+      'ui.keys': 'Keys: Space pause · [ ] speed · 1–8 planets · P Pluto · 0 Sun · 9 black hole · R reset · L labels · O orbits · B black hole · G lensing · D Dyson shell · W wormhole · C comet · A asteroid belt · S switch system',
 
       'label.bh': 'Black hole (lensing)',
       'opt.bh': 'Black hole',

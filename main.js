@@ -1295,7 +1295,7 @@ PLANETS.forEach((p, idx) => {
   const div = document.createElement('div'); div.className='label'; div.textContent=pname(p.name);
   const label = new CSS2DObject(div); label.position.set(0, p.rDisp*1.6, 0); atmoParent.add(label);
 
-  planetObjs.push({ data:p, obj, mesh, orbitBase:m, orbitLine, labelEl:div,
+  planetObjs.push({ data:p, obj, mesh, orbitBase:m, orbitLine, labelEl:div, label,
                     ring: p.ring ? ring : null, moon: p.moon ? moon : null,
                     moons: p._moons || [], bin });
   if (bin) p._binR = bin.dC + p.rDisp * (p.binary.radiusKm / p.radiusKm) + 0.3;  // 聚焦時需涵蓋凱龍軌道
@@ -1757,6 +1757,284 @@ function beltStep(){
   for (const m of beltMats) m.uniforms.uTime.value = simTime;   // 位置全在著色器內, CPU 只推進時間
 }
 
+// =============================================================================
+//  TRAPPIST-1 系統 (太陽系外, 可切換的第二個場景)
+//
+//  為什麼值得獨立一章: 這是已知最緊密的行星系統 —— 7 顆地球大小行星全部
+//  軌道在半徑 < 0.07 AU (比水星還近), 且構成【完整的共振鏈】:
+//    b:c:d:e:f:g:h 的相鄰週期比 = 8:5 · 5:3 · 3:2 · 3:2 · 4:3 · 3:2
+//  (Agol et al. 2021, 實測偏差 < 1.3%; 已在 Python 側數值確認)。
+//  用真實週期驅動 => 共振鏈在時間拉長後自動浮現, 不是手工對齊。
+//
+//  宿主是 M8V 紅矮星: Teff=2566 K (深橙紅), R=0.119 R☉ —— 只比木星大 19%。
+//  行星全部【潮汐鎖定】(距離太近, 自轉=公轉), 故一面永書、一面永夜。
+//  大氣: JWST (2023) 對 b 的觀測【未發現】實質大氣 => 誠實起見不畫大氣殼,
+//  以裸岩/冰世界呈現 (與戴森殼「光學誠實」同一哲學: 不為了好看而假裝物理)。
+//
+//  尺度: 軌道半徑【線性】映射 (a × TRAP_SCALE) 以保留共振幾何; 恆星與行星半徑
+//  適度誇大 (真實恆星在此尺度僅 3.7 單位, 會被內行星軌道淹沒)。
+// =============================================================================
+// 真實資料 (Agol et al. 2021 / NASA Exoplanet Archive): a AU, P 天, R R⊕, M M⊕, Teq K
+const TRAP_STAR = { Teff: 2566, R_Rsun: 0.1192, M_Msun: 0.0898, L_Lsun: 0.000524 };
+const TRAP_PLANETS = [
+  { name:'b', a:0.01154, P:1.510826,  R:1.116, M:1.374, Teq:400, color:[150,120,100], type:'rocky', seed:201 },
+  { name:'c', a:0.01580, P:2.421937,  R:1.097, M:1.308, Teq:342, color:[140,124,112], type:'rocky', seed:202 },
+  { name:'d', a:0.02227, P:4.049219,  R:0.788, M:0.388, Teq:288, color:[120,130,140], type:'rocky', seed:203 },
+  { name:'e', a:0.02925, P:6.099043,  R:0.920, M:0.692, Teq:251, color:[110,124,138], type:'rocky', seed:204 },
+  { name:'f', a:0.03849, P:9.207540,  R:1.045, M:1.039, Teq:219, color:[150,158,168], type:'rocky', seed:205 },
+  { name:'g', a:0.04683, P:12.352446, R:1.129, M:1.321, Teq:199, color:[168,176,186], type:'rocky', seed:206 },
+  { name:'h', a:0.06189, P:18.7728,   R:0.755, M:0.326, Teq:173, color:[188,198,210], type:'rocky', seed:207 },
+];
+const TRAP_RESONANCE = ['8:5','5:3','3:2','3:2','4:3','3:2'];  // 相鄰週期比 (文件/說明用)
+const TRAP_SCALE = 6600;          // 軌道: 場景單位 / AU (線性, 保留共振幾何)
+const TRAP_STAR_R = 12;           // 恆星視覺半徑 (真實 3.7 的 ~3.3x 誇大, 否則被內軌淹沒)
+const TRAP_PR = 2.6;              // 行星視覺半徑: 場景單位 / R⊕ (地球大小在此尺度太小, 需放大)
+const TRAP_DAYS_PER_SEC = 2.0;    // 時間壓縮: simSpeed=1 時每秒推進的「天」數 (共振鏈要慢看)
+const TRAP_CAM_HOME = new THREE.Vector3(0, 260, 640);
+const TRAP_FOCUS_BASE = 100;      // 聚焦索引: 行星 = 100+i, 恆星 = 90 (避開太陽系的 0..8 與負索引)
+const TRAP_STAR_FOCUS = 90;
+let trapDays = 0;                 // TRAPPIST 專用模擬時間 (天), 與太陽系 simTime(年) 獨立
+const trap = { group: null, star: null, starMat: null, light: null, glow: null,
+               planets: [], orbitLines: [], labelEls: [], labelObjs: [], focusOpts: [], flare: 0 };
+
+function buildTrappist(){
+  const g = new THREE.Group();
+  g.visible = false;
+  scene.add(g);
+  trap.group = g;
+
+  // --- 紅矮星: 對流顆粒 + 耀斑 (M 矮星頻繁 flares) ---
+  const [sr, sg, sb] = blackbodyRGB(TRAP_STAR.Teff);
+  const starMat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uFlare: { value: 0 }, uCol: { value: new THREE.Color(sr/255, sg/255, sb/255) } },
+    vertexShader: `varying vec3 vN; varying vec2 vUv;
+      void main(){ vUv=uv; vN=normalize(normalMatrix*normal);
+        gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `
+      varying vec3 vN; varying vec2 vUv; uniform float uTime; uniform float uFlare; uniform vec3 uCol;
+      float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+      float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+        float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+vec2(1,1));
+        return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }
+      float fbm(vec2 p){ float v=0.0,a=0.5; for(int i=0;i<5;i++){ v+=a*noise(p); p*=2.05; a*=0.5; } return v; }
+      void main(){
+        vec2 p = vUv * vec2(5.0, 2.5);
+        float n = fbm(p + vec2(uTime*0.04, uTime*0.02));
+        float n2 = fbm(p*2.2 - uTime*0.05);
+        float h = n*0.65 + n2*0.35;
+        // M 矮星: 深橙紅核心, 對流斑點 (granulation), 較太陽暗
+        vec3 deep = uCol * 0.45, mid = uCol * 0.9, hot = mix(uCol, vec3(1.0,0.85,0.7), 0.5);
+        vec3 col = mix(deep, mid, smoothstep(0.25,0.55,h));
+        col = mix(col, hot, smoothstep(0.6,0.95,h));
+        float rim = pow(clamp(1.0-abs(vN.z),0.0,1.0), 1.5);
+        col += rim * uCol * 0.4;
+        // 耀斑: 全域增亮 (可超過 bloom 閾值 => 真實的「亮起來」)
+        col *= 1.0 + uFlare * 2.5;
+        gl_FragColor = vec4(col * (1.6 + uFlare*1.5), 1.0);
+      }`,
+  });
+  const star = new THREE.Mesh(new THREE.SphereGeometry(TRAP_STAR_R, 48, 48), starMat);
+  star.userData.focusIndex = TRAP_STAR_FOCUS;
+  clickable.push(star);
+  g.add(star);
+  trap.star = star; trap.starMat = starMat;
+  trap.glow = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: makeGlowTexture(), color: 0xff6633, transparent: true,
+    blending: THREE.AdditiveBlending, depthWrite: false }));
+  trap.glow.scale.set(TRAP_STAR_R*5, TRAP_STAR_R*5, 1);
+  g.add(trap.glow);
+  // 恆星光源: 紅矮星光度僅 0.000524 L☉, 但近距離行星仍受光 => 給足視覺亮度
+  const light = new THREE.PointLight(0xff8855, 1.4, 0, 0.0);
+  g.add(light);
+  trap.light = light;
+  const starDiv = document.createElement('div'); starDiv.className = 'label bh'; starDiv.textContent = 'TRAPPIST-1';
+  const starLabel = new CSS2DObject(starDiv); starLabel.position.set(0, TRAP_STAR_R*1.6, 0); g.add(starLabel);
+  trap.starLabelEl = starDiv; trap.labelObjs.push(starLabel);
+
+  // --- 7 顆行星: 真實週期 => 共振鏈; 潮汐鎖定 (pivot 旋轉, 行星不自轉) ---
+  TRAP_PLANETS.forEach((tp, i) => {
+    const fake = { name: 'TRAPPIST-1'+tp.name, type: tp.type, color: tp.color, seed: tp.seed };
+    const proc = genPlanet(fake);                       // 程序化岩石/冰貼圖 (顏色+法線+粗糙度)
+    const mat = new THREE.MeshStandardMaterial({
+      map: proc.color, normalMap: proc.normal, roughnessMap: proc.rough,
+      color: 0xffffff, roughness: 1.0, metalness: 0.0 });
+    mat.normalScale.set(0.8, 0.8);
+    applyWrapLighting(mat, 0.1, null);                  // 柔和晨昏線
+    mat.envMapIntensity = 0.1;
+    const rVis = tp.R * TRAP_PR;
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(rVis, 40, 40), mat);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.userData.focusIndex = TRAP_FOCUS_BASE + i;
+    const pivot = new THREE.Group();
+    const holder = new THREE.Group(); holder.position.x = tp.a * TRAP_SCALE; holder.add(mesh);
+    pivot.add(holder); g.add(pivot);
+    clickable.push(mesh);
+    const proxy = new THREE.Mesh(new THREE.SphereGeometry(Math.max(rVis*2.2, 6), 12, 10), clickProxyMat);
+    proxy.visible = false; proxy.userData.focusIndex = TRAP_FOCUS_BASE + i; holder.add(proxy);
+    clickable.push(proxy);
+    const div = document.createElement('div'); div.className = 'label'; div.textContent = 'TRAPPIST-1'+tp.name;
+    const label = new CSS2DObject(div); label.position.set(0, rVis*1.7, 0); holder.add(label);
+    trap.labelEls.push(div); trap.labelObjs.push(label);
+    // 軌道線 (圓, 半徑真實比例)
+    const SEG = 128, op = new Float32Array((SEG+1)*3), rr = tp.a * TRAP_SCALE;
+    for (let s = 0; s <= SEG; s++){ const th = s/SEG*TWO_PI; op[s*3]=Math.cos(th)*rr; op[s*3+1]=0; op[s*3+2]=Math.sin(th)*rr; }
+    const og = new THREE.BufferGeometry(); og.setAttribute('position', new THREE.BufferAttribute(op,3));
+    const ol = new THREE.LineLoop(og, new THREE.LineBasicMaterial({ color:0x7a5a4a, transparent:true, opacity:0.4 }));
+    g.add(ol); trap.orbitLines.push(ol);
+    trap.planets.push({ data: tp, mesh, pivot, holder, rVis, phase: (i*0.9)%TWO_PI });
+  });
+}
+buildTrappist();
+
+// 耀斑排程: 以 trapDays 決定性產生偶發短促耀斑 (M 矮星特徵)。
+function trapFlareEnvelope(days){
+  // 每 ~0.6 天一個時間窗, 窗內以雜湊決定是否耀斑與強度; 耀斑本身 ~數小時。
+  // 必須【決定性】: 以 trapDays 推導, 不用 Math.random() —— 否則每幀重新抽樣,
+  // 耀斑會變成高頻閃爍噪訊 (正是本專案最忌的「行星異常閃爍」)。
+  const win = Math.floor(days / 0.6);
+  const hsh = Math.imul(win >>> 0, 2654435761) >>> 0;   // 32-bit 乘法 (免 Number 精度溢出)
+  const u = hsh / 4294967296;
+  if (u < 0.55) return 0;                               // 多數窗無耀斑
+  const amp = (u - 0.55) / 0.45;                        // 0..1
+  const frac = (days / 0.6) - win;                      // 窗內相位 0..1
+  const u2 = (Math.imul((win ^ 0x9e3779b9) >>> 0, 40503) >>> 0) / 4294967296;
+  const center = 0.3 + 0.4 * u2;                        // 耀斑在窗內的位置
+  const w = 0.12;
+  const pulse = Math.exp(-0.5 * Math.pow((frac - center) / w, 2));
+  return amp * pulse;
+}
+function trapStep(dt){
+  const d = trap;
+  // 時間上限速: 最快的 b 星週期 1.51 天, 若每秒推進超過 MAX_TRAP_DAYS,
+  // b 星會轉得快到紋理閃爍 (與行星自轉 MAX_SPD 同一誡律)。限速後全部行星
+  // 等比例變慢 => 共振鏈的相對週期比仍精確成立。
+  const MAX_TRAP_DAYS = 1.8;                       // 天/秒 (b 星 ≤ 1.19 rev/s)
+  let daysPerSec = simSpeed * TRAP_DAYS_PER_SEC;
+  if (daysPerSec > MAX_TRAP_DAYS) daysPerSec = MAX_TRAP_DAYS;
+  trapDays += dt * daysPerSec;
+  d.starMat.uniforms.uTime.value = trapDays * 0.6;
+  // 行星: 真實週期驅動 => 共振鏈自動成立; 潮汐鎖定 (mesh 在 holder 內不自轉)
+  for (const pl of d.planets){
+    pl.pivot.rotation.y = pl.phase + TWO_PI * trapDays / pl.data.P;
+  }
+  // 耀斑 -> 恆星增亮 + 光源脈動
+  const fl = trapFlareEnvelope(trapDays);
+  d.starMat.uniforms.uFlare.value = fl;
+  d.light.intensity = 1.4 * (1 + fl * 1.8);
+  d.glow.scale.setScalar(TRAP_STAR_R * (5 + fl * 1.5));
+  d.flare = fl;
+}
+// trap 模式的相機跟隨/渲染尾巴 (與太陽系共用同一套 flyTo/follow 邏輯)。
+function trapAnimateTail(dt){
+  const tracking = flyTo.active ? flyTo.index : (followIdx !== -1 ? followIdx : -1);
+  if (tracking !== -1) {
+    getFocusPos(tracking, _trackPos);
+    if (hasTrack) _fd.subVectors(_trackPos, _prevTrack); else _fd.set(0, 0, 0);
+    _prevTrack.copy(_trackPos); hasTrack = true;
+    if (_fd.lengthSq() > 1e-12){ camera.position.add(_fd); controls.target.add(_fd); }
+  }
+  if (flyTo.active) {
+    getFocusPos(flyTo.index, _wp);
+    _cam.copy(camera.position).sub(_wp);
+    if (_cam.lengthSq() < 1e-6) _cam.set(0, 0.4, 1);
+    _cam.normalize();
+    _desired.copy(_wp).add(_cam.multiplyScalar(flyTo.dist));
+    if (reduceMotion) { controls.target.copy(_wp); camera.position.copy(_desired); flyTo.active = false; }
+    else {
+      flyTo.t += dt;
+      controls.target.lerp(_wp, damp(9.0, dt));
+      camera.position.lerp(_desired, damp(6.3, dt));
+      if (camera.position.distanceTo(_desired) < Math.max(flyTo.dist * 0.06, 0.1) || flyTo.t > 2.2) flyTo.active = false;
+    }
+  } else if (followIdx !== -1) {
+    getFocusPos(followIdx, _wp);
+    controls.target.lerp(_wp, damp(7.7, dt));
+  }
+  controls.update();
+  composer.render();
+  labelRenderer.render(scene, camera);
+}
+
+// =============================================================================
+//  場景切換 (太陽系 ⇄ TRAPPIST-1)
+//
+//  兩套系統共用同一個 scene/camera/composer, 但座標與時間尺度不同,
+//  同一畫面只顯示一套。切換時必須:
+//    1. 群組 visible: 太陽系在 ecliptic 下 (行星/帶/戴森/太陽),
+//       但黑洞/蟲洞/彗星是【直接掛在 scene】的 => 需個別隱藏。
+//    2. CSS2D 標籤不看祖先 visible => 必須逐一設 label.visible。
+//    3. 後處理透鏡 pass 僅屬太陽系 => trap 模式停用。
+//    4. 相機/追蹤/焦點選單重置 (兩套 focusIndex 不重疊)。
+// =============================================================================
+function syncSystemLabels(){
+  const s = SYSTEM === 'solar';
+  for (const o of planetObjs) if (o.label) o.label.visible = s;
+  if (BH.label) BH.label.visible = s && bhOn;
+  if (WH.label) WH.label.visible = s && whOn;
+  if (COMET.label) COMET.label.visible = s;
+  for (const lo of trap.labelObjs) lo.visible = !s;
+}
+// 焦點選單: 前 5 個靜態選項 (自由/太陽/黑洞/蟲洞/彗星) 常駐 index.html;
+// 尾端依系統重建 (太陽系行星 或 TRAPPIST 天體)。
+function rebuildFocusTail(){
+  while (focusSelect.options.length > 5) focusSelect.remove(5);
+  focusOptions.length = 0; trap.focusOpts.length = 0;
+  const staticIdx = [1, 2, 3, 4];        // 太陽/黑洞/蟲洞/彗星 (index 0 = 自由視角)
+  if (SYSTEM === 'solar'){
+    staticIdx.forEach(i => { focusSelect.options[i].disabled = false; });
+    planetObjs.forEach((o, idx) => {
+      const opt = new Option(pname(o.data.name), String(idx));
+      focusSelect.add(opt); focusOptions.push({ opt, name: o.data.name });
+    });
+  } else {
+    staticIdx.forEach(i => { focusSelect.options[i].disabled = true; });  // 太陽系天體不可聚焦
+    focusSelect.add(new Option(t('trap.star'), String(TRAP_STAR_FOCUS)));
+    trap.planets.forEach((pl, i) => {
+      const opt = new Option('TRAPPIST-1' + pl.data.name, String(TRAP_FOCUS_BASE + i));
+      focusSelect.add(opt); trap.focusOpts.push(opt);
+    });
+  }
+}
+function updateSpeedLabel(){
+  const el = $('speedVal');
+  if (!el) return;
+  el.textContent = SYSTEM === 'solar'
+    ? t('unit.yrPerSec', { v: simSpeed.toFixed(2) })
+    : t('unit.dayPerSec', { v: (simSpeed * TRAP_DAYS_PER_SEC).toFixed(1) });
+}
+function renderTrapNote(){
+  const el = $('trapNote');
+  if (el) el.innerHTML = SYSTEM === 'trap' ? `<span class="ds-note">${t('trap.note')}</span>` : '';
+}
+function setSystem(sys){
+  if (sys === SYSTEM) return;
+  SYSTEM = sys;
+  const toSolar = sys === 'solar';
+  // 群組可見性
+  ecliptic.visible = toSolar;                       // 太陽/行星/帶/戴森/軌道線/sunLight
+  BH.group.visible = toSolar && bhOn;               // 黑洞/蟲洞/彗星是 scene 直接子節
+  WH.group.visible = toSolar && whOn;
+  COMET.group.visible = toSolar;
+  trap.group.visible = !toSolar;
+  syncSystemLabels();
+  // 後處理: 透鏡僅屬太陽系 (trap 無黑洞/蟲洞)
+  lensingPass.enabled = toSolar;
+  whLensingPass.enabled = toSolar;
+  if (!toSolar){ lensingPass.uniforms.strength.value = 0; whLensingPass.uniforms.strength.value = 0; }
+  // 焦點/相機重置
+  followIdx = -1; flyTo.active = false; hasTrack = false;
+  controls.minDistance = 30;
+  rebuildFocusTail();
+  focusSelect.value = '-1';
+  camera.position.copy(toSolar ? CAM_HOME : TRAP_CAM_HOME);
+  controls.target.set(0, 0, 0);
+  controls.update();
+  updateSpeedLabel();
+  renderTrapNote();
+  // trap 模式時間尺度不同, 重置各自的積分器避免跳變
+  if (!toSolar) trapDays = 0;
+}
+
 // 引力透鏡 後處理著色器 (螢幕空間近似)
 const LensingShader = {
   uniforms: {
@@ -1889,13 +2167,17 @@ let simSpeed = 0.2;          // 年 / 秒
 let paused = false;
 let showOrbits = true, showLabels = true, lensOn = true, bhOn = true;
 let followIdx = -1;
+// 場景切換: 'solar' = 太陽系 (預設), 'trap' = TRAPPIST-1。兩套座標/時間尺度不同,
+// 同一畫面只顯示一套 (另一套 group.visible=false); 切換時重置相機與追蹤。
+let SYSTEM = 'solar';
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const $ = id => document.getElementById(id);
 $('speed').addEventListener('input', e => {
   simSpeed = parseFloat(e.target.value);
-  $('speedVal').textContent = t('unit.yrPerSec', { v: simSpeed.toFixed(2) });
+  updateSpeedLabel();                            // 依系統顯示「年/秒」或「天/秒」
 });
+$('system').addEventListener('change', e => { setSystem(e.target.value); armUiIdle(); });
 $('quality').addEventListener('change', e => {
   QUALITY = e.target.value; $('qualVal').textContent = QUALITY; // 8k/4k/2k 與語言無關
   reloadTextures(); // 即時釋放舊紋理並重載新解析度
@@ -1910,7 +2192,7 @@ $('reset').addEventListener('click', () => {
   followIdx = -1; flyTo.active = false; $('focus').value = '-1';
   hasTrack = false;
   controls.minDistance = 30;
-  camera.position.copy(CAM_HOME); controls.target.set(0,0,0);
+  camera.position.copy(SYSTEM === 'trap' ? TRAP_CAM_HOME : CAM_HOME); controls.target.set(0,0,0);
 });
 $('focus').addEventListener('change', e => { focusOn(parseInt(e.target.value)); });
 
@@ -1944,7 +2226,13 @@ addEventListener('keydown', e => {
     e.preventDefault(); $('pause').click(); return;
   }
   if (typing) return;                       // 其餘快捷鍵在輸入/選單操作中一律不生效
-  if (k >= '1' && k <= '8'){ e.preventDefault(); focusOn(parseInt(k, 10) - 1); return; }
+  if (k >= '1' && k <= '8'){                 // 數字鍵依系統對應不同天體
+    e.preventDefault();
+    const n = parseInt(k, 10);
+    if (SYSTEM === 'trap'){ if (n >= 1 && n <= 7) focusOn(TRAP_FOCUS_BASE + n - 1); }
+    else focusOn(n - 1);                     // 太陽系: 1-8 = 八顆行星 (+冥王星=9? 數字鍵只到 8)
+    return;
+  }
   switch (k){
     case '0': e.preventDefault(); focusOn(-2); break;          // 太陽
     case '9': e.preventDefault(); focusOn(-3); break;          // 黑洞
@@ -1960,6 +2248,10 @@ addEventListener('keydown', e => {
     case 'c': case 'C': e.preventDefault(); focusOn(-5); break;   // 彗星
     case 'p': case 'P': e.preventDefault(); focusOn(8); break;    // 冥王星 (索引 8; 數字鍵已滿, 用字母)
     case 'a': case 'A': e.preventDefault(); $('tBelt').click(); break;  // 小行星帶
+    case 's': case 'S': e.preventDefault(); {                     // 切換星際系統 (太陽系 ⇄ TRAPPIST-1)
+      const sel = $('system'); sel.value = sel.value === 'solar' ? 'trap' : 'solar';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));   // 沿用既有 handler (不另寫一套狀態邏輯)
+      break; }
   }
 });
 
@@ -2088,11 +2380,17 @@ renderer.domElement.addEventListener('pointerup', e => {
 });
 
 const flyTo = { active: false, index: -1, dist: 200, t: 0 };
+// TRAPPIST 聚焦索引: 恆星 = TRAP_STAR_FOCUS(90), 行星 = TRAP_FOCUS_BASE(100)+i。
+// 與太陽系的 0..8 與負索引不重疊, 故同一套 focusOn/flyTo 可共用。
+const isTrapIdx = idx => idx === TRAP_STAR_FOCUS || idx >= TRAP_FOCUS_BASE;
+function trapPlanetOf(idx){ return trap.planets[idx - TRAP_FOCUS_BASE]; }
 function getFocusPos(idx, out){
   if (idx === -2) out.set(0, 0, 0);                 // 太陽 (黃道群組原點)
   else if (idx === -3) out.copy(BH.pos);            // 黑洞
   else if (idx === -4) out.copy(WH.pos);            // 蟲洞
   else if (idx === -5) out.copy(COMET.pos);         // 彗星
+  else if (idx === TRAP_STAR_FOCUS) out.set(0, 0, 0);          // TRAPPIST 恆星 (群組原點)
+  else if (idx >= TRAP_FOCUS_BASE) trapPlanetOf(idx).mesh.getWorldPosition(out);  // TRAPPIST 行星
   else planetObjs[idx].obj.getWorldPosition(out);   // 行星
   return out;
 }
@@ -2106,6 +2404,8 @@ function focusEffR(idx){
   if (idx === -2) return SUN_R * 1.5;              // 太陽
   if (idx === -4) return WH.throatR * 2.2;         // 蟲洞: 含喉緣餘裕
   if (idx === -5) return 6;                        // 彗星: 含彗髮餘裕
+  if (idx === TRAP_STAR_FOCUS) return TRAP_STAR_R * 1.5;   // TRAPPIST 恆星
+  if (idx >= TRAP_FOCUS_BASE) return trapPlanetOf(idx).rVis * 3.0;  // TRAPPIST 行星 (含軌道餘裕)
   const p = PLANETS[idx];
   return p._binR || p.rDisp * (p.ring ? 2.9 : 1.4);           // 土星含環餘裕; 雙體含凱龍軌道餘裕
 }
@@ -2118,6 +2418,9 @@ function focusDistFor(idx){
 function focusOn(idx){
   if (idx === -3 && !bhOn) { $('focus').value = String(followIdx); return; } // 隱藏的黑洞不可聚焦
   if (idx === -4 && !whOn) { $('focus').value = String(followIdx); return; } // 隱藏的蟲洞不可聚焦
+  // 跳系統聚焦: 太陽系天體索引在 TRAPPIST 模式下無效 (反之亦然), 忽略之;
+  // 但自由視角 (-1) 兩系統共用, 必須放行。
+  if (idx !== -1 && isTrapIdx(idx) !== (SYSTEM === 'trap')) { $('focus').value = String(followIdx); return; }
   followIdx = idx; $('focus').value = String(idx);
   hasTrack = false; // 重設跟隨暫存器, 避免跨目標的大位移
   if (idx === -1) { flyTo.active = false; controls.minDistance = 30; return; } // 自由視角
@@ -2827,9 +3130,18 @@ function animate(){
   rafId = requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   if (!paused) simTime += dt * simSpeed;
+  const simDt = paused ? 0 : dt;
+
+  // 兩套系統互斥: 只推進當前系統的時間/位置, 另一套凍結 (不可見也不耗 CPU)。
+  if (SYSTEM === 'trap'){
+    stepFades();
+    if (!paused) trapStep(dt);
+    starMat.uniforms.uTime.value = simTime;   // 星空背景兩系統共用 (恆在場)
+    trapAnimateTail(dt);
+    return;
+  }
 
   // 行星 (暫停時不積分自轉)
-  const simDt = paused ? 0 : dt;
   for (const o of planetObjs) updatePlanet(o, simDt);
   stepFades();
   dsStep(simDt);
@@ -2987,19 +3299,25 @@ function renderDynamicUI(){
   if (WH.label && WH.label.element) WH.label.element.textContent = t('label.wh');
   if (COMET.label && COMET.label.element) COMET.label.element.textContent = t('label.comet');
   // 2. 鏡頭追蹤選單: 只改 text, value (索引) 不動 → 選中項不會被刷掉
+  //    (focusOptions 只含太陽系行星; TRAPPIST 選項為拉丁字母名稱, 與語言無關)
   for (const f of focusOptions) f.opt.textContent = pname(f.name);
   // 3. 目前狀態相關的即時文字
-  $('speedVal').textContent = t('unit.yrPerSec', { v: simSpeed.toFixed(2) });
+  updateSpeedLabel();   // 依系統顯示「年/秒」或「天/秒」
   const pb = $('pause');
   pb.textContent = paused ? t('btn.play') : t('btn.pause');
   // 4. 載入進度 (若已淡出, renderLoaderTex 自行 return)
   renderLoaderTex();
   renderDysonStats();   // 換語言時物理讀數也要重新取詞
   renderWhNote();       // 蟲洞說明同樣要重新取詞
+  renderTrapNote();     // TRAPPIST 說明同樣要重新取詞
   dsSyncLabels();       // 殼/環的半徑標籤也要跟著換語言
 }
 window.addEventListener('langchange', renderDynamicUI);
 renderDynamicUI(); // 初始同步: index.html 的預置文字一律是中文, 語言為 en 時靠這裡轉正
+// 系統切換的初始化: 建焦點尾端 (太陽系行星) + 同步標籤可見性 (SYSTEM='solar' 預設)。
+// 必須在 renderDynamicUI() 之後: 兩者都操作 focusSelect, 順序一致才不會互蓋。
+rebuildFocusTail();
+syncSystemLabels();
 
 // 啟動: 等初始貼圖批次載入完成再淡出載入覆蓋層 (M4)
 window.__universeReady = true;
