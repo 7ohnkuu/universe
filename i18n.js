@@ -50,6 +50,8 @@
       'q.8k': '8k (極高畫質, 大量顯存)',
       'q.4k': '4k (推薦)',
       'q.2k': '2k (省顯存)',
+      'q.degraded': '⚠ {missing} 個 8k 檔缺失, 已降級至 4k/程序化貼圖 (跑 scripts/fetch-textures.sh 可下載)',
+      'q.degradedTitle': '所選 8k 貼圖有 {missing} 個檔案不在本地, 實際已降級顯示 (見 .gitignore: 8k 未隨倉庫發布)',
 
       'btn.orbits': '軌道線',
       'btn.labels': '名稱',
@@ -150,6 +152,8 @@
       'q.8k': '8k (best quality, heavy VRAM)',
       'q.4k': '4k (recommended)',
       'q.2k': '2k (low VRAM)',
+      'q.degraded': '⚠ {missing} 8k files missing — fell back to 4k/procedural (run scripts/fetch-textures.sh to download)',
+      'q.degradedTitle': '{missing} of the selected 8k textures are not present locally; the view has silently degraded (see .gitignore: 8k is not shipped with the repo)',
 
       'btn.orbits': 'Orbits',
       'btn.labels': 'Labels',

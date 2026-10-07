@@ -243,6 +243,8 @@
           <option value="2k" data-i18n="q.2k">2k (省顯存)</option>
         </select>
       </div>
+      <!-- 8k 靜默降級提示: 檔案缺失時 loadTex 會無聲降級, 這裡如實告知實際層級 -->
+      <div class="ds-note" id="qualWarn" style="display:none"></div>
       <div class="row btns">
         <button id="tOrbits" class="on" aria-pressed="true" data-i18n="btn.orbits">軌道線</button>
         <button id="tLabels" class="on" aria-pressed="true" data-i18n="btn.labels">名稱</button>

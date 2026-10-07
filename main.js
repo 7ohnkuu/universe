@@ -821,6 +821,20 @@ const TEX_BASE = './textures/';
 let QUALITY = document.getElementById('quality').value; // 與下拉選單一致 (預設 4k)
 // 重新載入世代代碼: 舊世代的 in-flight 載入完成時作廢並釋放 (防 8k/2k 交叉覆寫)
 let texGen = 0;
+// 貼圖載入失敗的 URL 集合。為什麼需要: 8k 檔未隨倉庫發布 (見 .gitignore / fetch-textures.sh),
+// 選 8k 但沒下載時, loadTex 會逐檔失敗並【靜默】降級為程序化/低解析度貼圖,
+// 只印一行 console.warn —— UI 上完全看不出來。這個集合讓面板能如實顯示實際層級。
+let texFails = new Set();
+// 目前【實際生效】的貼圖層級。回傳 { shown, missing8k }:
+//   shown: 使用者選的層級 (QUALITY), 但若有 8k 檔缺失則標記降級。
+// 判定: 只有當 QUALITY='8k' 且有任何 8k_ 開頭的貼圖失敗, 才算「靜默降級」。
+// (木星/土星的假 8k 別名回 4k_, 天王星/海王星恆為 2k —— 那些是設計, 不是失敗。)
+function effectiveQuality(){
+  if (QUALITY !== '8k') return { shown: QUALITY, degraded: false, missing: 0 };
+  let missing = 0;
+  for (const url of texFails) if (/[\/]8k_/.test(url)) missing++;
+  return { shown: QUALITY, degraded: missing > 0, missing };
+}
 // 天王星/海王星 SSS 僅提供 2k; 地球法線/高光僅 2k; 木星/土星無真實 8k (檔與 4k 相同) -> 別名 4k
 function prefix(){ return QUALITY === '8k' ? '8k_' : QUALITY === '4k' ? '4k_' : ''; }
 function planetDay(p){
@@ -918,7 +932,7 @@ function loadTex(url, srgb){
     return tex;
   };
   return new Promise(res => {
-    const fail = () => { console.warn(t('err.texFail'), url); res(finish(null)); };
+    const fail = () => { console.warn(t('err.texFail'), url); texFails.add(url); res(finish(null)); };
     const tag = tex => { tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; tex.anisotropy = MAX_ANISO; res(finish(tex)); };
     loadBitmap(url).then(bmp => { const tex = new THREE.Texture(bmp); tex.needsUpdate = true; tag(tex); }, fail);
   });
@@ -1282,6 +1296,7 @@ async function upgradeMoon(moon, gen){
 // 切換解析度: 先載入後抵達再釋放舊紋理; URL 未變的槽位跳過重載
 function reloadTextures(){
   const gen = ++texGen;
+  texFails = new Set();               // 只反映【本次世代】的載入結果 (舊世代的失敗不該殘留)
   const jobs = [];
   for (const o of planetObjs){
     jobs.push(upgradePlanet(o.data, o.mesh.material, gen));
@@ -1289,7 +1304,26 @@ function reloadTextures(){
     if (o.moon) jobs.push(upgradeMoon(o.moon, gen));
     for (const mo of (o.moons || [])) jobs.push(mo.upgrade(gen));
   }
-  return Promise.all(jobs);
+  // 重載完成後才更新層級標籤: 失敗集合是异步填的 (loadTex 逐檔回傳),
+  // 在 Promise.all 前讀會拿到舊值 => 靜默降級提示不準。
+  return Promise.all(jobs).then(() => updateQualityLabel());
+}
+// 貼圖層級標籤: 顯示使用者選的層級; 若選 8k 但檔案缺失 (靜默降級) 則加警示,
+// 告知實際只剩 4k/程序化, 並提示跑 scripts/fetch-textures.sh。不靜默假裝 8k 生效。
+function updateQualityLabel(){
+  const el = $('qualVal');
+  if (!el) return;
+  const q = effectiveQuality();
+  const warn = $('qualWarn');
+  if (q.degraded){
+    el.textContent = q.shown + ' ⚠';
+    el.title = t('q.degradedTitle', { missing: q.missing });
+    if (warn){ warn.textContent = t('q.degraded', { missing: q.missing }); warn.style.display = ''; }
+  } else {
+    el.textContent = q.shown;              // 8k/4k/2k 與語言無關
+    el.title = '';
+    if (warn) warn.style.display = 'none';
+  }
 }
 
 // =============================================================================
@@ -2455,8 +2489,9 @@ $('speed').addEventListener('input', e => {
 });
 $('system').addEventListener('change', e => { setSystem(e.target.value); armUiIdle(); });
 $('quality').addEventListener('change', e => {
-  QUALITY = e.target.value; $('qualVal').textContent = QUALITY; // 8k/4k/2k 與語言無關
-  reloadTextures(); // 即時釋放舊紋理並重載新解析度
+  QUALITY = e.target.value;
+  $('qualVal').textContent = QUALITY + '…';   // 重載中: 暫時顯示進行符, 完成後由 updateQualityLabel() 定案
+  reloadTextures(); // 即時釋放舊紋理並重載新解析度; 完成後更新層級/降級提示
 });
 $('pause').addEventListener('click', e => {
   paused = !paused;
@@ -3621,6 +3656,7 @@ function renderDynamicUI(){
   renderDysonStats();   // 換語言時物理讀數也要重新取詞
   renderWhNote();       // 蟲洞說明同樣要重新取詞
   renderTrapNote();     // TRAPPIST 說明同樣要重新取詞
+  updateQualityLabel(); // 貼圖層級/降級提示重新取詞
   dsSyncLabels();       // 殼/環的半徑標籤也要跟著換語言
 }
 window.addEventListener('langchange', renderDynamicUI);
@@ -3643,6 +3679,7 @@ async function hideLoader(){
     if (p._moons) for (const mo of p._moons) jobs.push(mo.upg);
   }
   try { await Promise.all(jobs); } catch (e){ /* 單檔失敗已在 loadTex 內處理 */ }
+  updateQualityLabel();   // 初始載入也定案層級標籤 (預設 4k 不會降級, 但保持與切換路徑一致)
   if (window.__universeError) return; // 錯誤覆蓋層優先, 不得被淡出蓋掉
   loaderEl.classList.add('done');
   armUiIdle();  // 載入結束才開始算「閒置」: 載入期間計時沒有意義, 只會讓面板一出現就消失
