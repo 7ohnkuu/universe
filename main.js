@@ -657,6 +657,66 @@ function addAtmosphere(radius, color, power, ownerObj, rayTau){
 }
 
 // =============================================================================
+//  軸傾與季節指示器
+//
+//  focus 某行星時畫出:
+//    · 自轉軸 (實線, 沿 obj 區域 +Y = 軸傾後的旋轉軸, 北極端有箭頭)
+//    · 赤道面圓盤 (obj 區域 XZ 面的環 + 淡填充)
+//    · 軌道面法線參考 (虛線): 與自轉軸的夾角【就是軸傾】 => 直觀顯示 23.44° 等
+//  為何掛在 obj 而非 mesh: mesh 會自轉 (rotation.y), 軸不進動 => 指示器必須
+//  不隨自轉動, 故掛在只帶 tilt 的 obj (對雙體冥王星 obj 原點=質心, 軸仍正確)。
+// =============================================================================
+function makeAxisIndicator(p, rDisp){
+  const g = new THREE.Group();
+  g.visible = false;
+  const L = rDisp * 1.85;                    // 軸長 (單側)
+  // 指示器是【教學示意圖】=> 全部 depthTest:false + 高 renderOrder, 使其像 overlay
+  // 一樣恆浮在行星之上 (不被行星本體/大氣/環遮擋)。否則軌道法線虛線有一半在
+  // 球體內被吃掉, 幾乎看不見 (實測 orangePx=0)。
+  const OVER = { depthTest: false, depthWrite: false };
+  const axisMat = new THREE.LineBasicMaterial({ color: 0x7cc4ff, transparent: true, opacity: 0.9, ...OVER });
+  // 自轉軸線
+  const ax = new THREE.BufferGeometry().setFromPoints([ new THREE.Vector3(0,-L,0), new THREE.Vector3(0,L,0) ]);
+  const axLine = new THREE.Line(ax, axisMat); axLine.renderOrder = 20; g.add(axLine);
+  // 北極箭頭 (小錐體)
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(rDisp*0.14, rDisp*0.36, 12),
+    new THREE.MeshBasicMaterial({ color: 0xa9dcff, transparent: true, opacity: 0.95, ...OVER }));
+  cone.position.y = L + rDisp*0.16; cone.renderOrder = 20;
+  g.add(cone);
+  // 赤道面圓盤 (XZ 面)
+  const eqR = rDisp * 1.32;
+  const SEG = 96, cp = new Float32Array((SEG+1)*3);
+  for (let i=0;i<=SEG;i++){ const th=i/SEG*TWO_PI; cp[i*3]=Math.cos(th)*eqR; cp[i*3+1]=0; cp[i*3+2]=Math.sin(th)*eqR; }
+  const eg = new THREE.BufferGeometry(); eg.setAttribute('position', new THREE.BufferAttribute(cp,3));
+  const eqRing = new THREE.LineLoop(eg, new THREE.LineBasicMaterial({ color: 0x7cc4ff, transparent: true, opacity: 0.7, ...OVER }));
+  eqRing.renderOrder = 20; g.add(eqRing);
+  // 赤道面淡填充 (環面, additive)
+  const disc = new THREE.Mesh(new THREE.RingGeometry(eqR*0.55, eqR, 64, 1),
+    new THREE.MeshBasicMaterial({ color: 0x3a6fa8, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, ...OVER }));
+  disc.rotation.x = -Math.PI/2; disc.renderOrder = 19;
+  g.add(disc);
+  // 軌道面法線參考 (虛線) 在 finishAxisIndicator() 加入: 必須等 g 掛進 obj 後,
+  // 才能用 obj.quaternion (含 tilt) 算出「軌道面法線在 obj 區域座標的方向」。
+  g.userData.L = L;
+  return g;
+}
+// 在指示器加入 obj 後呼叫: 算出軌道面法線 (ecliptic 的 +Y) 在 obj 區域框架的方向
+function finishAxisIndicator(g, obj, rDisp){
+  const orbN = new THREE.Vector3(0,1,0).applyQuaternion(obj.quaternion.clone().invert());
+  const L = g.userData.L;
+  const dashMat = new THREE.LineDashedMaterial({ color: 0xffc07c, transparent: true, opacity: 0.85,
+    dashSize: rDisp*0.2, gapSize: rDisp*0.14, depthTest: false, depthWrite: false });
+  // 從行星【表面】畫到 L (不是從中心): 起點已浮出球體, 加上 depthTest:false => 全程可見
+  const dg = new THREE.BufferGeometry().setFromPoints([ orbN.clone().multiplyScalar(rDisp), orbN.clone().multiplyScalar(L) ]);
+  const dl = new THREE.Line(dg, dashMat);
+  dl.computeLineDistances();                  // LineDashedMaterial 必須呼叫才顯示虛線
+  dl.renderOrder = 21;
+  g.add(dl);
+  g.userData.orbNormalLine = dl;
+}
+
+// =============================================================================
 //  地球夜面閃電 (lightning)
 //
 //  真實地球每時每刻約有 1500–2000 場雷暴、每秒 ~44 次閃電, 但只有【夜面】的
@@ -1496,9 +1556,16 @@ PLANETS.forEach((p, idx) => {
   const div = document.createElement('div'); div.className='label'; div.textContent=pname(p.name);
   const label = new CSS2DObject(div); label.position.set(0, p.rDisp*1.6, 0); atmoParent.add(label);
 
+  // 軸傾指示器: 必須掛在 obj (只帶 tilt, 不自轉也不繞質心)。
+  // 對雙體冥王星不能掛 atmoParent(=plutoHolder): 它會隨互繞 pivot 旋轉,
+  // 軸會跟著搖擺。掛 obj 時軸線固定為系統自轉軸, 圓盤在質心 (= 系統旋轉軸通過點)。
+  const axis = makeAxisIndicator(p, p.rDisp);
+  obj.add(axis);
+  finishAxisIndicator(axis, obj, p.rDisp);
+
   planetObjs.push({ data:p, obj, mesh, orbitBase:m, orbitLine, labelEl:div, label,
                     ring: p.ring ? ring : null, moon: p.moon ? moon : null,
-                    moons: p._moons || [], bin });
+                    moons: p._moons || [], bin, axis });
   if (bin) p._binR = bin.dC + p.rDisp * (p.binary.radiusKm / p.radiusKm) + 0.3;  // 聚焦時需涵蓋凱龍軌道
   const opt = new Option(pname(p.name), String(idx));
   focusSelect.add(opt);
@@ -2175,6 +2242,13 @@ function syncSystemLabels(){
   if (COMET.label) COMET.label.visible = s;
   for (const lo of trap.labelObjs) lo.visible = !s;
 }
+// 軸傾指示器: 只在【太陽系模式】且【聚焦某行星】(followIdx ∈ 0..N-1) 時顯示該行星的軸。
+// TRAPPIST 模式的行星索引 ≥100, 不在 planetObjs 範圍 => 全部隱藏。
+function syncAxisIndicators(){
+  const s = SYSTEM === 'solar';
+  const focused = s && followIdx >= 0 && followIdx < planetObjs.length ? followIdx : -1;
+  planetObjs.forEach((o, i) => { if (o.axis) o.axis.visible = (i === focused); });
+}
 // 焦點選單: 前 5 個靜態選項 (自由/太陽/黑洞/蟲洞/彗星) 常駐 index.html;
 // 尾端依系統重建 (太陽系行星 或 TRAPPIST 天體)。
 function rebuildFocusTail(){
@@ -2225,6 +2299,7 @@ function setSystem(sys){
   // 焦點/相機重置
   followIdx = -1; flyTo.active = false; hasTrack = false;
   controls.minDistance = 30;
+  syncAxisIndicators();   // 切系統 => 取消行星聚焦 => 軸指示器全隱
   rebuildFocusTail();
   focusSelect.value = '-1';
   camera.position.copy(toSolar ? CAM_HOME : TRAP_CAM_HOME);
@@ -2393,6 +2468,7 @@ $('reset').addEventListener('click', () => {
   followIdx = -1; flyTo.active = false; $('focus').value = '-1';
   hasTrack = false;
   controls.minDistance = 30;
+  syncAxisIndicators();   // 重置 => 取消聚焦 => 軸指示器隱藏
   camera.position.copy(SYSTEM === 'trap' ? TRAP_CAM_HOME : CAM_HOME); controls.target.set(0,0,0);
 });
 $('focus').addEventListener('change', e => { focusOn(parseInt(e.target.value)); });
@@ -2624,6 +2700,7 @@ function focusOn(idx){
   if (idx !== -1 && isTrapIdx(idx) !== (SYSTEM === 'trap')) { $('focus').value = String(followIdx); return; }
   followIdx = idx; $('focus').value = String(idx);
   hasTrack = false; // 重設跟隨暫存器, 避免跨目標的大位移
+  syncAxisIndicators();   // 軸傾指示器: 只顯示目前聚焦的行星
   if (idx === -1) { flyTo.active = false; controls.minDistance = 30; return; } // 自由視角
   flyTo.active = true; flyTo.index = idx; flyTo.t = 0;
   // 依目標大小動態調整最近距離 (黑洞維持 30); 以目的地 effR 設定避免中途換目標時 snap
