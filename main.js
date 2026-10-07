@@ -389,6 +389,38 @@ function applyRingShadow(mat, p, obj){
   };
   mat.customProgramCacheKey = () => (prevKey ? prevKey() : '') + '+ringshadow';
 }
+// 土星環的視角相關亮度 (opposition surge + forward scattering)。
+//
+//  真實土星環不是朗伯反射面, 亮度依【相位角 α】(在環處, 太陽與觀者兩方向夾角)
+//  而變:
+//   · α→0 (衝日, 太陽在觀者背後): 【Seeliger 效應 / 衝日增亮】。環粒子間的
+//     互相遮蔽在此刻歸零 (shadow-hiding) + 相干背散射 => 環急遽變亮。
+//     這正是「衝日」時土星環最亮、卡西尼縫最明顯的原因。
+//   · α→180° (背光, 太陽在環另一側): 【前向散射】。微米級冰粒把光向前散射,
+//     背光看環反而更亮 (與行星大氣前向散射同源)。
+//  兩者都是相位角的函數, 中間 (α≈90°, 側光) 最暗。
+//
+//  為何可用單一標量: 環的徑向尺度 (~1.4×rDisp) 遠小於土星–太陽距離, 故整個環面
+//  的相位角近乎一致 (差異 < 1°), 不需逐 texel 計算 —— 這是物理上合理的近似。
+//
+//  上限: 峰值倍率壓在 ~1.55, 環色 (≤0.85) × 1.55 ≈ 1.32 < bloom threshold(2.0),
+//  故增亮是真的變亮, 不會被 UnrealBloomPass 燒成方塊 (與星點/行星同一戒律)。
+const RING_SURGE_OPP = 0.45, RING_W_OPP = 0.105;   // 衝日: 幅度, 半寬 (rad, ≈6°)
+const RING_SURGE_FWD = 0.55, RING_W_FWD = 0.21;    // 前向: 幅度, 半寬 (rad, ≈12°)
+function ringBrightness(phaseRad){
+  const a = phaseRad;
+  const opp = RING_SURGE_OPP * Math.exp(-0.5 * Math.pow(a / RING_W_OPP, 2));
+  const fwd = RING_SURGE_FWD * Math.exp(-0.5 * Math.pow((Math.PI - a) / RING_W_FWD, 2));
+  return 1 + opp + fwd;
+}
+// 太陽在世界原點。傳入環宿主 (土星 obj) 的世界座標與相機世界座標, 回傳相位角 α。
+const _rbToSun = new THREE.Vector3(), _rbToCam = new THREE.Vector3();
+function ringPhaseAngle(hostWorld, camWorld){
+  _rbToSun.copy(hostWorld).negate();            // 環 -> 太陽 (世界原點)
+  _rbToCam.copy(camWorld).sub(hostWorld);       // 環 -> 相機
+  if (_rbToSun.lengthSq() < 1e-9 || _rbToCam.lengthSq() < 1e-9) return 0;
+  return _rbToSun.angleTo(_rbToCam);            // [0, π]
+}
 function applyWrapLighting(mat, wrap, extraPatch){
   mat.onBeforeCompile = shader => {
     shader.uniforms.uWrap = { value: wrap };
@@ -880,16 +912,33 @@ async function upgradePlanet(p, mat, gen){
 async function upgradeRing(ring, gen){
   const url = ringTex();
   if (ring.userData.texUrl === url) return;
-  const t = await loadTex(url, true);
-  if (gen !== texGen){ t && t.dispose(); return; }
-  if (!t) return; // 失敗保留程序化著色器環
+  const tex = await loadTex(url, true);   // 不叫 t —— 那會遮蔽外層的翻譯函數 t()
+  if (gen !== texGen){ tex && tex.dispose(); return; }
+  if (!tex) return; // 失敗保留程序化著色器環
   const old = ring.material;
-  ring.material = new THREE.MeshStandardMaterial({ map: t, transparent: true, side: THREE.DoubleSide,
+  ring.material = new THREE.MeshStandardMaterial({ map: tex, transparent: true, side: THREE.DoubleSide,
     depthWrite: false, roughness: 1, metalness: 0, envMapIntensity: 0.2, alphaTest: 0.12 });
+  // 視角相關亮度: 真實環貼圖走 MeshStandardMaterial (PBR), 無法像程序化環那樣
+  // 直接在 ShaderMaterial 裡寫 col*uRingBright。改以 onBeforeCompile 在最終
+  // gl_FragColor 前乘上 uRingBright (與程序化環同一實體, 共用 ring.userData.brightU)。
+  const brightU = ring.userData.brightU;
+  if (brightU){
+    ring.material.onBeforeCompile = shader => {
+      shader.uniforms.uRingBright = brightU;
+      const needle = 'gl_FragColor = vec4( outgoingLight, diffuseColor.a );';
+      if (shader.fragmentShader.includes(needle)){
+        shader.fragmentShader = 'uniform float uRingBright;\n' +
+          shader.fragmentShader.replace(needle, 'gl_FragColor = vec4( outgoingLight * uRingBright, diffuseColor.a );');
+      } else {
+        console.warn(t('err.patchDiffuse'));
+      }
+    };
+    ring.material.customProgramCacheKey = () => 'ringbright';
+  }
   // alphaTest>0 讓 r160 自動複製 map+alphaTest 成 distance-material 變體 -> 環縫有真實透明陰影
   if (old){ if (old.map) old.map.dispose(); old.dispose(); }
   ring.castShadow = false;   // 環影改由行星 shader 解析計算 (shadow map 對薄環會鋸齒)
-  ring.userData.ringTex = t; // 供行星 shader 取樣 alpha
+  ring.userData.ringTex = tex; // 供行星 shader 取樣 alpha
   ring.receiveShadow = true;
   ring.userData.texUrl = url;
 }
@@ -1208,6 +1257,10 @@ PLANETS.forEach((p, idx) => {
   // 土星環
   let ring = null;
   if (p.ring) {
+    // 視角相關亮度的共用 uniform 物件: 程序化環 (ShaderMaterial) 與真實環
+    // (upgradeRing 換上的 MeshStandardMaterial) 引用【同一個】物件, 故每幀
+    // 只需寫 p._ringBrightU.value 一次, 兩種材質同步。物理見 updatePlanet。
+    p._ringBrightU = { value: 1.0 };
     const inner = p.rDisp * 1.3, outer = p.rDisp * 2.4;
     const ringGeo = new THREE.RingGeometry(inner, outer, 96, 1);
     // r160 RingGeometry 的 UV 是平面投影 (x/y 直徑), 環貼圖是沿 x 的徑向剖面 ->
@@ -1224,9 +1277,10 @@ PLANETS.forEach((p, idx) => {
       ringGeo,
       new THREE.ShaderMaterial({
         transparent: true, side: THREE.DoubleSide, depthWrite: false,
+        uniforms: { uRingBright: p._ringBrightU },   // 視角相關亮度 (見下)
         vertexShader: `varying vec2 vP; void main(){ vP=position.xy; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
         fragmentShader: `
-          varying vec2 vP;
+          varying vec2 vP; uniform float uRingBright;
           void main(){
             float r=length(vP); float t=(r-${inner.toFixed(2)})/(${(outer-inner).toFixed(2)});
             float bands=0.5+0.5*sin(t*60.0);
@@ -1234,11 +1288,12 @@ PLANETS.forEach((p, idx) => {
             // 卡西尼縫
             a*= smoothstep(0.02,0.04,abs(t-0.55));
             vec3 col=mix(vec3(0.85,0.78,0.6), vec3(0.6,0.52,0.4), bands);
-            gl_FragColor=vec4(col, a);
+            gl_FragColor=vec4(col*uRingBright, a);   // 亮度隨相位角 (衝日增亮/前向散射)
           }`,
       })
     );
     ring.rotation.x = -Math.PI / 2; // 置於赤道面
+    ring.userData.brightU = p._ringBrightU;   // 供 upgradeRing 換上的 MeshStandardMaterial 引用同一 uniform
     obj.add(ring);
     p._ringUpg = upgradeRing(ring, texGen); // 以真實土星環貼圖覆蓋 (失敗保留程序化環)
   }
@@ -3290,6 +3345,16 @@ function animate(){
     _sv.transformDirection(camera.matrixWorldInverse);        // -> 視空間
     a.mat.uniforms.uSunDirView.value.copy(_sv);
     if (a.obj === planetObjs[2].obj && earthNightShader) earthNightShader.uniforms.uSunDirView.value.copy(_sv);
+  }
+
+  // 土星環視角相關亮度 (僅太陽系模式): 相位角 = 環處 (太陽↔環↔相機) 的夾角。
+  // 相機已在本幀定格 (controls.update 在上方), 故此時算相位角與畫面一致。
+  // 衝日 (α→0) 與背光 (α→180°) 兩個增亮峰; 拖動視角時環的亮度會平滑變化。
+  for (const o of planetObjs){
+    if (!o.data._ringBrightU) continue;
+    o.obj.getWorldPosition(_sv);                     // 復用 _sv 暫存 (下方未再用它)
+    const ph = ringPhaseAngle(_sv, camera.position);
+    o.data._ringBrightU.value = ringBrightness(ph);
   }
 
   // 引力透鏡: 投影黑洞到螢幕空間; 強度平滑 (L12), 且僅在黑洞「本幀確實可投影」時輸出,
